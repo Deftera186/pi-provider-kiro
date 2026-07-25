@@ -2,12 +2,13 @@
 //
 // Entry point that wires all features together via pi.registerProvider().
 
-import type { Api, Model, OAuthCredentials } from "@earendil-works/pi-ai";
+import type { Api, Model, OAuthCredentials, RefreshModelsContext } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { formatSafeError } from "./debug.js";
 import { getKiroEndpoints, resolveApiRegion } from "./endpoints.js";
 import { getKiroCliCredentials } from "./kiro-cli.js";
 import { setExtensionContext } from "./login-ui.js";
-import { getCachedModels, kiroModels } from "./models.js";
+import { getCachedModels, isCacheStale, type KiroModel, kiroModels, updateKiroModelsCache } from "./models.js";
 import type { KiroCredentials } from "./oauth.js";
 import { loginKiro, refreshKiroToken } from "./oauth.js";
 import { streamKiro } from "./stream.js";
@@ -18,6 +19,35 @@ export type { KiroStreamEvent } from "./event-parser.js";
 export { KIRO_MODEL_IDS, kiroModels, resolveKiroModel } from "./models.js";
 export { streamKiro } from "./stream.js";
 
+/**
+ * Host-driven catalog refresh. `oauth.modifyModels` only projects whatever the
+ * cache already holds, so this is the path that actually fetches when the host
+ * asks for a refresh or the cache has gone stale. The composer re-applies
+ * `modifyModels` on top of the returned list, so region/profileArn projection
+ * still happens here.
+ *
+ * Persistence uses the existing Kiro management file cache
+ * (`updateKiroModelsCache` / `~/.kiro-management-models-cache.json`) rather than
+ * `context.store`, so oauth/stream and host refresh share one catalog source.
+ */
+async function refreshKiroModels(context: RefreshModelsContext): Promise<KiroModel[]> {
+  const credential = context.credential;
+  const oauthCredential = credential?.type === "oauth" ? (credential as unknown as KiroCredentials) : undefined;
+  const accessToken = oauthCredential?.access ?? (credential?.type === "api_key" ? credential.key : undefined);
+  const region = resolveApiRegion(oauthCredential?.region);
+
+  if (accessToken && context.allowNetwork && (context.force || isCacheStale(region))) {
+    try {
+      await updateKiroModelsCache(accessToken, region, oauthCredential?.profileArn);
+    } catch (error) {
+      // Serve the cached catalog when discovery fails.
+      console.warn(`[pi-provider-kiro] Failed to refresh Kiro model catalog in ${region}: ${formatSafeError(error)}`);
+    }
+  }
+
+  return getCachedModels(region);
+}
+
 export default function (pi: ExtensionAPI) {
   // Capture ctx for the custom TUI login component
   pi.on("session_start", async (_event, ctx) => {
@@ -27,6 +57,7 @@ export default function (pi: ExtensionAPI) {
     baseUrl: getKiroEndpoints("us-east-1").runtime,
     api: "kiro-api",
     models: kiroModels,
+    refreshModels: refreshKiroModels,
     oauth: {
       // Name reflects all supported auth methods: AWS Builder ID, Google, GitHub
       name: "Kiro (Builder ID / Google / GitHub)",

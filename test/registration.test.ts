@@ -1,12 +1,21 @@
+import { rmSync } from "node:fs";
+import type { ProviderModelsStore } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getKiroCliCredentials } from "../src/kiro-cli.js";
-import { kiroModels } from "../src/models.js";
+import { KIRO_MANAGEMENT_CACHE_PATH, kiroModels } from "../src/models.js";
 
 const mockPi = () => {
   const registerProvider = vi.fn();
   return { pi: { registerProvider, on: vi.fn() } as unknown as ExtensionAPI, registerProvider };
 };
+
+/** Minimal host store fixture — refreshKiroModels intentionally uses the Kiro file cache instead. */
+const mockProviderModelsStore = (): ProviderModelsStore => ({
+  read: vi.fn(async () => undefined),
+  write: vi.fn(async () => {}),
+  delete: vi.fn(async () => {}),
+});
 
 describe("Feature 1: Extension Registration", () => {
   it("exports a default function", async () => {
@@ -62,6 +71,80 @@ describe("Feature 1: Extension Registration", () => {
     mod.default(pi);
 
     expect(registerProvider.mock.calls[0][1].api).toBe("kiro-api");
+  });
+
+  describe("refreshModels", () => {
+    beforeEach(() => {
+      rmSync(KIRO_MANAGEMENT_CACHE_PATH, { force: true });
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      rmSync(KIRO_MANAGEMENT_CACHE_PATH, { force: true });
+    });
+
+    const refreshModels = async () => {
+      const mod = await import("../src/index.js");
+      const { pi, registerProvider } = mockPi();
+      mod.default(pi);
+      return registerProvider.mock.calls[0][1].refreshModels;
+    };
+
+    it("serves the bootstrap catalog without a credential and never hits the network", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const models = await (await refreshModels())({
+        allowNetwork: true,
+        force: true,
+        store: mockProviderModelsStore(),
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(models).toEqual(kiroModels);
+    });
+
+    it("fetches the regional catalog when forced with an OAuth credential", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ models: [{ modelId: "claude-opus-4.8" }, { modelId: "openai-gpt-5.6" }] }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const models = await (await refreshModels())({
+        allowNetwork: true,
+        force: true,
+        store: mockProviderModelsStore(),
+        credential: {
+          type: "oauth",
+          access: "refresh-access",
+          refresh: "r",
+          expires: 0,
+          region: "eu-west-1",
+          profileArn: "arn:aws:codewhisperer:eu-central-1:123456789012:profile/test",
+        },
+      });
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(String(fetchMock.mock.calls[0][0])).toContain("https://management.eu-central-1.kiro.dev/");
+      expect(models.map((model: { id: string }) => model.id)).toEqual(["claude-opus-4-8", "openai-gpt-5-6"]);
+    });
+
+    it("falls back to the cached catalog when discovery fails", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+
+      const models = await (await refreshModels())({
+        allowNetwork: true,
+        force: true,
+        store: mockProviderModelsStore(),
+        credential: { type: "oauth", access: "a", refresh: "r", expires: 0, region: "us-east-1", profileArn: "arn:p" },
+      });
+
+      expect(models).toEqual(kiroModels);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Failed to refresh Kiro model catalog"));
+      warn.mockRestore();
+    });
   });
 
   it.each([
