@@ -40,6 +40,7 @@ import { getKiroCliCredentials, getKiroCliCredentialsAllowExpired, refreshViaKir
 import {
   invalidateKiroProfileArn,
   type KiroManagementAuth,
+  KiroManagementHttpError,
   resetKiroProfileArnCache,
   resolveKiroProfileArn,
 } from "./management.js";
@@ -223,9 +224,29 @@ export function streamKiro(
       const cliCreds = getKiroCliCredentials() ?? getKiroCliCredentialsAllowExpired();
       const cliProfileArn = cliCreds?.access === accessToken ? cliCreds.profileArn : undefined;
       const initialProfileArn = modelMetadata.kiroProfileArn || optionProfileArn || cliProfileArn;
-      let profileArn: string =
-        initialProfileArn ||
-        (skipProfileResolutionForTests ? TEST_PROFILE_ARN : await resolveKiroProfileArn(managementAuth));
+      let profileArn: string;
+      try {
+        profileArn =
+          initialProfileArn ||
+          (skipProfileResolutionForTests ? TEST_PROFILE_ARN : await resolveKiroProfileArn(managementAuth));
+      } catch (error) {
+        if (!(error instanceof KiroManagementHttpError) || error.status !== 403) throw error;
+
+        // The host may have captured an access token before kiro-cli rotated it.
+        // Re-read the shared store first, then force a refresh only when it still
+        // contains the rejected token. Profile discovery must succeed before the
+        // runtime request can be constructed.
+        const storedCreds = getKiroCliCredentials();
+        const freshCreds =
+          storedCreds?.access && storedCreds.access !== accessToken ? storedCreds : refreshViaKiroCli();
+        if (!freshCreds?.access) throw error;
+
+        accessToken = freshCreds.access;
+        managementAuth = { accessToken, region };
+        profileArn =
+          freshCreds.profileArn ||
+          (skipProfileResolutionForTests ? TEST_PROFILE_ARN : await resolveKiroProfileArn(managementAuth));
+      }
 
       // Trigger dynamic models cache update in the background if empty or stale
       const { isCacheStale, updateKiroModelsCache } = await import("./models.js");
