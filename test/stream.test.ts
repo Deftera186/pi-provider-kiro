@@ -483,6 +483,112 @@ describe("Feature 9: Streaming Integration", () => {
     vi.unstubAllGlobals();
   });
 
+  it("uses a newer kiro-cli token when initial profile discovery returns 403", async () => {
+    resetProfileArnCache(false);
+    const freshProfileArn = "arn:aws:codewhisperer:us-east-1:123:profile/FRESH";
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 403, statusText: "Forbidden" })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ profiles: [{ arn: freshProfileArn }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: vi
+              .fn()
+              .mockResolvedValueOnce({
+                done: false,
+                value: encodeBody('{"content":"recovered"}{"contextUsagePercentage":5}'),
+              })
+              .mockResolvedValueOnce({ done: true, value: undefined }),
+            releaseLock: () => {},
+          }),
+        },
+      });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const kiroCliModule = await import("../src/kiro-cli.js");
+    const freshCliCreds = {
+      refresh: "fresh-refresh|client|secret|idc",
+      access: "fresh-token",
+      expires: Date.now() + 3_600_000,
+      clientId: "client",
+      clientSecret: "secret",
+      region: "us-east-1",
+      authMethod: "idc" as const,
+    };
+    const getCredsSpy = vi.spyOn(kiroCliModule, "getKiroCliCredentials").mockReturnValue(freshCliCreds);
+    const refreshSpy = vi.spyOn(kiroCliModule, "refreshViaKiroCli").mockReturnValue(undefined);
+
+    const events = await collect(streamKiro(makeModel(), makeContext(), { apiKey: "stale-token" }));
+
+    expect(refreshSpy).not.toHaveBeenCalled();
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe("Bearer stale-token");
+    expect(mockFetch.mock.calls[1][1].headers.Authorization).toBe("Bearer fresh-token");
+    expect(mockFetch.mock.calls[2][1].headers.Authorization).toBe("Bearer fresh-token");
+    expect(JSON.parse(mockFetch.mock.calls[2][1].body).profileArn).toBe(freshProfileArn);
+    expect(events.find((event) => event.type === "done")).toBeDefined();
+
+    getCredsSpy.mockRestore();
+    refreshSpy.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
+  it("forces a kiro-cli refresh when profile discovery rejects the stored token", async () => {
+    resetProfileArnCache(false);
+    const freshProfileArn = "arn:aws:codewhisperer:us-east-1:123:profile/REFRESHED";
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 403, statusText: "Forbidden" })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: vi
+              .fn()
+              .mockResolvedValueOnce({
+                done: false,
+                value: encodeBody('{"content":"recovered"}{"contextUsagePercentage":5}'),
+              })
+              .mockResolvedValueOnce({ done: true, value: undefined }),
+            releaseLock: () => {},
+          }),
+        },
+      });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const kiroCliModule = await import("../src/kiro-cli.js");
+    const staleCliCreds = {
+      refresh: "stale-refresh|client|secret|idc",
+      access: "stale-token",
+      expires: Date.now() + 3_600_000,
+      clientId: "client",
+      clientSecret: "secret",
+      region: "us-east-1",
+      authMethod: "idc" as const,
+    };
+    const freshCliCreds = { ...staleCliCreds, access: "fresh-token", profileArn: freshProfileArn };
+    const getCredsSpy = vi.spyOn(kiroCliModule, "getKiroCliCredentials").mockReturnValue(staleCliCreds);
+    const refreshSpy = vi.spyOn(kiroCliModule, "refreshViaKiroCli").mockReturnValue(freshCliCreds);
+
+    const events = await collect(streamKiro(makeModel(), makeContext(), { apiKey: "stale-token" }));
+
+    expect(refreshSpy).toHaveBeenCalledOnce();
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe("Bearer stale-token");
+    expect(mockFetch.mock.calls[1][1].headers.Authorization).toBe("Bearer fresh-token");
+    expect(JSON.parse(mockFetch.mock.calls[1][1].body).profileArn).toBe(freshProfileArn);
+    expect(events.find((event) => event.type === "done")).toBeDefined();
+
+    getCredsSpy.mockRestore();
+    refreshSpy.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
   it("uses a credential-projected profileArn without management discovery or a matching CLI token", async () => {
     resetProfileArnCache(false);
     const profileArn = "arn:aws:codewhisperer:us-east-1:123:profile/SOCIAL";
