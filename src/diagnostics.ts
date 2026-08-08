@@ -25,20 +25,20 @@ export const KIRO_TURN_PROVENANCE_DIAGNOSTIC = "kiro_turn_provenance";
 export type KiroStopReasonSource = "modeled" | "inferred";
 
 /**
- * Wire `StopReason` values whose meaning is not recoverable from the stop
- * reason pi ends up emitting.
+ * The complete wire `StopReason` vocabulary, so a consumer can match
+ * {@link KiroStopReasonRecord.modeled} against named members instead of
+ * hand-written string literals.
  *
  * Source of truth: `StopReason` in `KiroRuntimeServiceModel`
  * (`src/main/smithy/types/conversation/tokenTypes.smithy`), surfaced through the
- * generated client (`@amzn/kiro-runtime-service-typescript-client`).
+ * generated client (`@amzn/kiro-runtime-service-typescript-client`). All seven
+ * members are listed; the map is exhaustive by intent, and its test asserts that
+ * by exact equality.
  *
- * "Not recoverable" is about this provider's emitted value, not about pi's type.
- * The emitted `stopReason` is reconstructed from tool calls and whether a
- * `contextUsageEvent` arrived — `rawStopReason` is never consulted — so a wire
- * value only belongs here if reading the emitted value cannot tell you it
- * happened. `END_TURN` and `TOOL_USE` are omitted because the emitted value
- * agrees with them by construction whenever a contextUsage frame arrived. Every
- * other member is listed.
+ * None of these is reliably recoverable from the `stopReason` this provider
+ * emits, because that value is reconstructed from emitted tool calls and whether
+ * a `contextUsageEvent` arrived — `rawStopReason` is never consulted. Each member
+ * documents how the emitted value can disagree with it.
  */
 export const KIRO_MODELED_STOP_REASONS = {
   /**
@@ -82,6 +82,24 @@ export const KIRO_MODELED_STOP_REASONS = {
    * `metadataEvent` stop reason arrived at all.
    */
   unknown: "UNKNOWN",
+  /**
+   * The model finished naturally.
+   *
+   * The emitted value agrees (`"stop"`) only once a `contextUsageEvent` has
+   * arrived. A `metadataEvent`-only stream leaves `receivedContextUsage` false,
+   * so the emitted value is `"length"` while the service said it finished — a
+   * fabricated truncation that only this field contradicts.
+   */
+  endTurn: "END_TURN",
+  /**
+   * The model is requesting tool use.
+   *
+   * The emitted value agrees (`"toolUse"`) only when at least one tool call was
+   * actually emitted. A turn whose tool calls all had empty or unparseable input
+   * emits `"stop"` deliberately — that combination stalls pi's agent loop — so
+   * the service's `TOOL_USE` survives only here.
+   */
+  toolUse: "TOOL_USE",
 } as const;
 
 /**

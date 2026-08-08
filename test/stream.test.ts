@@ -3931,6 +3931,24 @@ describe("turn provenance diagnostic", () => {
     expect(stopReasonOf(msg).contextOverflow).toBeUndefined();
   });
 
+  it("records TOOL_USE when every tool call was dropped and the turn emitted stop", async () => {
+    // The emitted value is deliberately "stop" here, not "toolUse": empty content
+    // plus a toolUse stop stalls pi's agent loop. So the service's TOOL_USE is
+    // recoverable only from this field, and a consumer comparing emitted against
+    // modeled is how the dropped tool calls become visible at all.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { msg } = await run([
+      '{"name":"bash","toolUseId":"tc1","input":"not-json","stop":true}',
+      '{"stopReason":"TOOL_USE"}',
+      '{"contextUsagePercentage":10}',
+    ]);
+    warnSpy.mockRestore();
+
+    expect(msg?.stopReason).toBe("stop");
+    expect(msg?.content.filter((b) => b.type === "toolCall")).toHaveLength(0);
+    expect(stopReasonOf(msg)).toEqual({ emitted: "stop", source: "inferred", modeled: "TOOL_USE" });
+  });
+
   it("carries a CONTENT_FILTERED refusal, which also arrives on a successful turn", async () => {
     // Modeled as a metadataEvent, not a typed error: nothing on the error path
     // sees it, and pi's emitted stopReason has no member for it.

@@ -128,21 +128,22 @@ describe("createKiroTurnProvenanceDiagnostic", () => {
   });
 
   it("does not flag overflow for other modeled stop reasons", () => {
-    for (const raw of ["END_TURN", "TOOL_USE", "MAX_TOKENS", "PAUSE_TURN", "CONTENT_FILTERED", "UNKNOWN"]) {
+    for (const raw of Object.values(KIRO_MODELED_STOP_REASONS)) {
+      if (raw === KIRO_MODELED_STOP_REASONS.contextWindowExceeded) continue;
       const stopReason = make({ rawStopReason: raw }).details?.stopReason as Record<string, unknown>;
       expect(stopReason.contextOverflow).toBeUndefined();
     }
   });
 
-  it("names every wire stop reason whose occurrence the emitted value cannot reveal", () => {
-    // CONTENT_FILTERED belongs here for the same reason as the overflow: the
-    // service models a refusal as a *successful* metadataEvent carrying
-    // stopDetails.refusal, not as a typed error, so no error path ever sees it.
-    // MAX_TOKENS belongs here because this provider emits "stop" for it, not
-    // pi's "length"; UNKNOWN because "the service could not classify this turn"
-    // must stay distinguishable from no modeled value arriving at all. END_TURN
-    // and TOOL_USE are the only members left out, because the emitted value
-    // agrees with them by construction.
+  it("names the complete wire stop-reason vocabulary", () => {
+    // Exhaustive by intent: a consumer is told to match `modeled` against these
+    // members rather than write the strings itself, so a missing member forces a
+    // hand-written literal. None is reliably recoverable from the emitted value:
+    // the overflow and CONTENT_FILTERED ride *successful* metadataEvents no error
+    // path sees; MAX_TOKENS is emitted as "stop" rather than pi's "length";
+    // UNKNOWN must stay distinct from no modeled value arriving; END_TURN is
+    // emitted as "length" when no contextUsage frame arrives; and TOOL_USE is
+    // emitted as "stop" when every tool call was dropped as unparseable.
     // Source of truth: StopReason in KiroRuntimeServiceModel tokenTypes.smithy.
     expect(KIRO_MODELED_STOP_REASONS).toEqual({
       contextWindowExceeded: "MODEL_CONTEXT_WINDOW_EXCEEDED",
@@ -150,6 +151,8 @@ describe("createKiroTurnProvenanceDiagnostic", () => {
       pauseTurn: "PAUSE_TURN",
       maxTokens: "MAX_TOKENS",
       unknown: "UNKNOWN",
+      endTurn: "END_TURN",
+      toolUse: "TOOL_USE",
     });
   });
 
