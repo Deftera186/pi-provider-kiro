@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { findJsonEnd } from "../src/bracket-tool-parser.js";
 import { capacityRetryConfig, retryConfig } from "../src/retry.js";
 import { resetProfileArnCache, streamKiro } from "../src/stream.js";
-import type { KiroUsage } from "../src/token-usage.js";
+import type { KiroUsage, KiroUsageProvenance } from "../src/token-usage.js";
 import { EMPTY_CONTENT_PLACEHOLDER, type KiroHistoryEntry } from "../src/transform.js";
 import { concatMessages, encodeEventMessage } from "./helpers/event-stream.js";
 
@@ -3752,5 +3752,197 @@ describe("Feature 9: Streaming Integration", () => {
     expect(badPadding).toHaveLength(0);
 
     vi.unstubAllGlobals();
+  });
+});
+
+describe("turn provenance diagnostic", () => {
+  beforeEach(() => {
+    resetProfileArnCache(true);
+  });
+
+  /** The single provenance diagnostic on a terminal message. */
+  function provenanceOf(msg: AssistantMessage | undefined) {
+    expect(msg).toBeDefined();
+    if (!msg) throw new Error("Expected a terminal assistant message");
+    const found = (msg.diagnostics ?? []).filter((d) => d.type === "kiro_turn_provenance");
+    expect(found).toHaveLength(1);
+    return found[0];
+  }
+
+  function stopReasonOf(msg: AssistantMessage | undefined): Record<string, unknown> {
+    return provenanceOf(msg).details?.stopReason as Record<string, unknown>;
+  }
+
+  async function run(chunks: string[]) {
+    const mockFetch = mockFetchChunked(chunks);
+    vi.stubGlobal("fetch", mockFetch);
+    const events = await collect(streamKiro(makeModel(), makeContext(), { apiKey: "tok" }));
+    vi.unstubAllGlobals();
+    const done = events.find((e) => e.type === "done");
+    const error = events.find((e) => e.type === "error");
+    return {
+      msg: done?.type === "done" ? done.message : error?.type === "error" ? error.error : undefined,
+      terminal: done ? "done" : "error",
+    };
+  }
+
+  it("mirrors the measured usage provenance finalizeKiroUsage recorded", async () => {
+    const { msg } = await run([
+      '{"content":"Hello"}',
+      JSON.stringify({
+        tokenUsage: {
+          uncachedInputTokens: 1_200,
+          outputTokens: 340,
+          totalTokens: 9_540,
+          cacheReadInputTokens: 8_000,
+          cacheWriteInputTokens: 0,
+        },
+      }),
+    ]);
+
+    // The diagnostic must agree with the record on the usage object rather than
+    // reclassifying independently.
+    const usage = msg?.usage as KiroUsage;
+    expect(provenanceOf(msg).details?.usage).toEqual(usage.provenance);
+    expect((provenanceOf(msg).details?.usage as KiroUsageProvenance).cache).toBe("measured");
+  });
+
+  it("keeps the cache leg absent when no metadataEvent arrives", async () => {
+    // This is the case kermes needs: a fabricated 0/0 must stay distinguishable
+    // from a service-reported 0% cache hit.
+    const { msg } = await run(['{"content":"Hello"}', '{"contextUsagePercentage":10}']);
+
+    expect(msg?.usage.cacheRead).toBe(0);
+    expect(msg?.usage.cacheWrite).toBe(0);
+    const usage = provenanceOf(msg).details?.usage as KiroUsageProvenance;
+    expect(usage.cache).toBeUndefined();
+    expect("cache" in usage).toBe(false);
+  });
+
+  it("records the modeled stopReason alongside the emitted one", async () => {
+    const { msg } = await run(['{"content":"Hello"}', '{"stopReason":"END_TURN"}', '{"contextUsagePercentage":10}']);
+
+    expect(msg?.stopReason).toBe("stop");
+    expect(stopReasonOf(msg)).toEqual({ emitted: "stop", source: "inferred", modeled: "END_TURN" });
+  });
+
+  it("reports source as inferred while the emitted value is still reconstructed", async () => {
+    // The emitted stopReason comes from tool-call/contextUsage inference, not
+    // from the wire. Labelling it modeled would overstate what was measured.
+    const { msg } = await run(['{"content":"Hi"}', '{"stopReason":"END_TURN"}', '{"contextUsagePercentage":5}']);
+    expect(stopReasonOf(msg).source).toBe("inferred");
+  });
+
+  it("flags MODEL_CONTEXT_WINDOW_EXCEEDED, which arrives on a successful turn", async () => {
+    // No error body, 200 OK: the prose isContextOverflow() path cannot see this.
+    const { msg, terminal } = await run([
+      '{"content":"Partial answer"}',
+      '{"stopReason":"MODEL_CONTEXT_WINDOW_EXCEEDED"}',
+      '{"contextUsagePercentage":99}',
+    ]);
+
+    expect(terminal).toBe("done");
+    expect(msg?.stopReason).toBe("stop");
+    expect(msg?.errorMessage).toBeUndefined();
+    expect(stopReasonOf(msg)).toEqual({
+      emitted: "stop",
+      source: "inferred",
+      modeled: "MODEL_CONTEXT_WINDOW_EXCEEDED",
+      contextOverflow: true,
+    });
+  });
+
+  it("carries PAUSE_TURN through even though this peer has no stopReason for it", async () => {
+    const { msg } = await run(['{"content":"Hi"}', '{"stopReason":"PAUSE_TURN"}', '{"contextUsagePercentage":5}']);
+    expect(stopReasonOf(msg).modeled).toBe("PAUSE_TURN");
+    expect(stopReasonOf(msg).contextOverflow).toBeUndefined();
+  });
+
+  it("passes stopDetails through verbatim", async () => {
+    const { msg } = await run([
+      '{"content":"Hi"}',
+      '{"stopReason":"END_TURN","stopDetails":{"note":"finished"}}',
+      '{"contextUsagePercentage":5}',
+    ]);
+    expect(stopReasonOf(msg).details).toEqual({ note: "finished" });
+  });
+
+  it("omits modeled fields when the service sent no metadataEvent", async () => {
+    const { msg } = await run(['{"content":"Hi"}', '{"contextUsagePercentage":5}']);
+    const stopReason = stopReasonOf(msg);
+    expect(stopReason).toEqual({ emitted: "stop", source: "inferred" });
+    expect("modeled" in stopReason).toBe(false);
+    expect("details" in stopReason).toBe(false);
+  });
+
+  it("records the inferred toolUse stop reason", async () => {
+    const { msg } = await run([
+      '{"name":"read","toolUseId":"t1","input":"{\\"path\\":\\"/tmp/a\\"}","stop":true}',
+      '{"contextUsagePercentage":7}',
+    ]);
+    expect(msg?.stopReason).toBe("toolUse");
+    expect(stopReasonOf(msg).emitted).toBe("toolUse");
+  });
+
+  it("attaches exactly one record even when an earlier attempt was retried", async () => {
+    // The record describes the turn that completed, not each attempt.
+    const empty = mockFetchOk("");
+    const ok = mockFetchChunked(['{"content":"Recovered"}', '{"stopReason":"END_TURN"}']);
+    const mockFetch = vi
+      .fn()
+      .mockImplementationOnce(() => empty())
+      .mockImplementationOnce(() => ok());
+    vi.stubGlobal("fetch", mockFetch);
+
+    const events = await collect(streamKiro(makeModel(), makeContext(), { apiKey: "tok" }));
+    vi.unstubAllGlobals();
+    const done = events.find((e) => e.type === "done");
+    const msg = done?.type === "done" ? done.message : undefined;
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    // provenanceOf asserts exactly one.
+    expect(stopReasonOf(msg).modeled).toBe("END_TURN");
+  });
+
+  it("does not describe a stale attempt's modeled stop reason after a retry", async () => {
+    // usageEvent is per-attempt, so a stopReason from a discarded attempt must
+    // not be reported against the attempt that actually completed.
+    const first = mockFetchChunked(['{"stopReason":"MODEL_CONTEXT_WINDOW_EXCEEDED"}']);
+    const second = mockFetchChunked(['{"content":"Recovered"}', '{"contextUsagePercentage":5}']);
+    const mockFetch = vi
+      .fn()
+      .mockImplementationOnce(() => first())
+      .mockImplementationOnce(() => second());
+    vi.stubGlobal("fetch", mockFetch);
+
+    const events = await collect(streamKiro(makeModel(), makeContext(), { apiKey: "tok" }));
+    vi.unstubAllGlobals();
+    const done = events.find((e) => e.type === "done");
+    const msg = done?.type === "done" ? done.message : undefined;
+
+    const stopReason = stopReasonOf(msg);
+    expect("modeled" in stopReason).toBe(false);
+    expect(stopReason.contextOverflow).toBeUndefined();
+  });
+
+  it("does not attach a provenance record to a failed turn", async () => {
+    // The error path has its own diagnostic; this record describes a turn whose
+    // numbers settled.
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: "Internal Server Error",
+      text: async () => "boom",
+      headers: new Headers(),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const events = await collect(streamKiro(makeModel(), makeContext(), { apiKey: "tok" }));
+    vi.unstubAllGlobals();
+    const error = events.find((e) => e.type === "error");
+    const msg = error?.type === "error" ? error.error : undefined;
+
+    expect(msg?.stopReason).toBe("error");
+    expect((msg?.diagnostics ?? []).some((d) => d.type === "kiro_turn_provenance")).toBe(false);
   });
 });

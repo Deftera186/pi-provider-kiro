@@ -14,6 +14,17 @@ import { loginKiro, refreshKiroToken } from "./oauth.js";
 import { streamKiro } from "./stream.js";
 import { fetchKiroUsage } from "./usage.js";
 
+export type {
+  KiroStopReasonRecord,
+  KiroStopReasonSource,
+  KiroTurnProvenanceInput,
+} from "./diagnostics.js";
+export {
+  createKiroTurnProvenanceDiagnostic,
+  isModeledContextOverflowStopReason,
+  KIRO_MODELED_STOP_REASONS,
+  KIRO_TURN_PROVENANCE_DIAGNOSTIC,
+} from "./diagnostics.js";
 export { resolveApiRegion } from "./endpoints.js";
 export type { KiroStreamEvent } from "./event-parser.js";
 export { KIRO_MODEL_IDS, kiroModels, resolveKiroModel } from "./models.js";

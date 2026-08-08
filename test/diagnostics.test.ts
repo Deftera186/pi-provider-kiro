@@ -1,0 +1,152 @@
+// ABOUTME: Tests for the per-turn provenance diagnostic shape and stop-reason recording.
+// ABOUTME: Pins the type string kermes matches on and the absent-vs-null contract.
+
+import { describe, expect, it } from "vitest";
+import {
+  createKiroTurnProvenanceDiagnostic,
+  isModeledContextOverflowStopReason,
+  KIRO_MODELED_STOP_REASONS,
+  KIRO_TURN_PROVENANCE_DIAGNOSTIC,
+} from "../src/diagnostics.js";
+import type { KiroUsageProvenance } from "../src/token-usage.js";
+
+const measured: KiroUsageProvenance = {
+  input: "measured",
+  output: "measured",
+  totalTokens: "measured",
+  cache: "measured",
+};
+
+function make(overrides: Partial<Parameters<typeof createKiroTurnProvenanceDiagnostic>[0]> = {}) {
+  return createKiroTurnProvenanceDiagnostic({
+    stopReason: "stop",
+    stopReasonSource: "inferred",
+    ...overrides,
+  });
+}
+
+describe("createKiroTurnProvenanceDiagnostic", () => {
+  it("uses the stable type string kermes matches on", () => {
+    // Hard-coded on purpose: renaming the constant must not silently change the
+    // wire-visible value a consumer keys off.
+    expect(KIRO_TURN_PROVENANCE_DIAGNOSTIC).toBe("kiro_turn_provenance");
+    expect(make().type).toBe("kiro_turn_provenance");
+  });
+
+  it("stays distinct from the error diagnostic type", () => {
+    expect(make().type).not.toBe("kiro_api_error");
+  });
+
+  it("carries no error field on a successful turn", () => {
+    // pi-ai's createAssistantMessageDiagnostic would synthesize
+    // { name: "ThrownValue", message: "undefined" } here.
+    const d = make();
+    expect(d.error).toBeUndefined();
+    expect("error" in d).toBe(false);
+  });
+
+  it("records a numeric timestamp", () => {
+    expect(typeof make().timestamp).toBe("number");
+  });
+
+  it("passes through the usage provenance verbatim rather than reclassifying", () => {
+    // finalizeKiroUsage owns the measured/derived/estimated precedence; a second
+    // classifier here could disagree with the numbers it describes.
+    expect(make({ usage: measured }).details?.usage).toEqual(measured);
+  });
+
+  it("preserves an absent cache leg so a real 0% stays distinguishable", () => {
+    const partial: KiroUsageProvenance = { input: "measured", output: "estimated" };
+    const usage = make({ usage: partial }).details?.usage as KiroUsageProvenance;
+    expect(usage.cache).toBeUndefined();
+    expect("cache" in usage).toBe(false);
+  });
+
+  it("omits usage entirely when the turn recorded no provenance", () => {
+    expect("usage" in (make().details ?? {})).toBe(false);
+  });
+
+  it("reports the emitted stop reason with the source the caller supplied", () => {
+    expect(make({ stopReason: "toolUse", stopReasonSource: "inferred" }).details?.stopReason).toEqual({
+      emitted: "toolUse",
+      source: "inferred",
+    });
+  });
+
+  it("does not upgrade source to modeled just because a modeled value arrived", () => {
+    // The service can report a stop reason the emitted value does not follow.
+    // Reading presence as authorship would label a local guess as measured.
+    const d = make({ stopReason: "stop", stopReasonSource: "inferred", rawStopReason: "END_TURN" });
+    const stopReason = d.details?.stopReason as Record<string, unknown>;
+    expect(stopReason.source).toBe("inferred");
+    expect(stopReason.modeled).toBe("END_TURN");
+  });
+
+  it("records source as modeled when the caller says the emitted value followed the wire", () => {
+    const d = make({ stopReason: "stop", stopReasonSource: "modeled", rawStopReason: "END_TURN" });
+    expect((d.details?.stopReason as Record<string, unknown>).source).toBe("modeled");
+  });
+
+  it("passes stopDetails through verbatim", () => {
+    const details = { reason: "something", nested: { a: 1 } };
+    const d = make({ rawStopReason: "END_TURN", stopDetails: details });
+    expect((d.details?.stopReason as Record<string, unknown>).details).toEqual(details);
+  });
+
+  it("omits modeled and details rather than nulling them when absent", () => {
+    const stopReason = make().details?.stopReason as Record<string, unknown>;
+    expect("modeled" in stopReason).toBe(false);
+    expect("details" in stopReason).toBe(false);
+    expect("contextOverflow" in stopReason).toBe(false);
+  });
+
+  it("flags a context overflow that arrived as a successful stop reason", () => {
+    // MODEL_CONTEXT_WINDOW_EXCEEDED rides a 200 with no error body, so the
+    // prose-matching isContextOverflow() path never sees it. Without this flag
+    // the turn looks like a normal early completion.
+    const d = make({
+      stopReason: "stop",
+      rawStopReason: KIRO_MODELED_STOP_REASONS.contextWindowExceeded,
+    });
+    const stopReason = d.details?.stopReason as Record<string, unknown>;
+    expect(stopReason.contextOverflow).toBe(true);
+    expect(stopReason.emitted).toBe("stop");
+  });
+
+  it("does not flag overflow for other modeled stop reasons", () => {
+    for (const raw of ["END_TURN", "TOOL_USE", "MAX_TOKENS", "PAUSE_TURN", "CONTENT_FILTERED", "UNKNOWN"]) {
+      const stopReason = make({ rawStopReason: raw }).details?.stopReason as Record<string, unknown>;
+      expect(stopReason.contextOverflow).toBeUndefined();
+    }
+  });
+
+  it("carries PAUSE_TURN through even though this peer has no stopReason for it", () => {
+    // Wire origin of pi 0.83.0's "pending". Recording it keeps the distinction
+    // available before the peer gains a slot for it.
+    const d = make({ stopReason: "stop", rawStopReason: KIRO_MODELED_STOP_REASONS.pauseTurn });
+    expect((d.details?.stopReason as Record<string, unknown>).modeled).toBe("PAUSE_TURN");
+  });
+
+  it("survives a JSON round-trip so it persists with the session", () => {
+    const d = make({
+      usage: measured,
+      stopReason: "toolUse",
+      rawStopReason: "TOOL_USE",
+      stopDetails: { note: "x" },
+    });
+    expect(JSON.parse(JSON.stringify(d))).toEqual(d);
+  });
+});
+
+describe("isModeledContextOverflowStopReason", () => {
+  it("recognizes the overflow stop reason", () => {
+    expect(isModeledContextOverflowStopReason("MODEL_CONTEXT_WINDOW_EXCEEDED")).toBe(true);
+    expect(isModeledContextOverflowStopReason(KIRO_MODELED_STOP_REASONS.contextWindowExceeded)).toBe(true);
+  });
+
+  it("rejects other stop reasons and an absent one", () => {
+    for (const raw of ["END_TURN", "MAX_TOKENS", "PAUSE_TURN", undefined]) {
+      expect(isModeledContextOverflowStopReason(raw)).toBe(false);
+    }
+  });
+});

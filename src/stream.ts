@@ -22,6 +22,7 @@ import { UniversalEventStreamMarshaller } from "@smithy/core/event-streams";
 import type { Message } from "@smithy/types";
 import { parseBracketToolCalls } from "./bracket-tool-parser.js";
 import { debugEnabled, debugLog, formatSafeError, redactSensitiveText } from "./debug.js";
+import { createKiroTurnProvenanceDiagnostic } from "./diagnostics.js";
 import {
   buildKiroAdditionalModelRequestFields,
   getKiroEffortConfig,
@@ -949,6 +950,34 @@ export function streamKiro(
           output.stopReason = "length";
         } else {
           output.stopReason = emittedToolCalls > 0 ? "toolUse" : "stop";
+        }
+        // Record where this turn's numbers came from. `usage.provenance` and the
+        // modeled stop reason are both invisible in the emitted message: the
+        // usage numbers are a flat bag with no room to say whether a figure was
+        // measured or invented, and `MetadataEvent.stopReason` has no slot in
+        // pi's `stopReason` vocabulary at this peer. diagnostics[] is the only
+        // structured channel out of here — streamKiro never rejects, it encodes
+        // outcomes into the stream.
+        //
+        // `stopReasonSource` is `inferred` because the branch above still
+        // reconstructs the emitted value from tool calls and contextUsage
+        // arrival. It becomes `modeled` when that branch consumes
+        // `rawStopReason`, which is a separate change.
+        try {
+          PiAi.appendAssistantMessageDiagnostic(
+            output,
+            createKiroTurnProvenanceDiagnostic({
+              usage: usage.provenance,
+              stopReason: output.stopReason,
+              stopReasonSource: "inferred",
+              rawStopReason: usageEvent?.rawStopReason,
+              stopDetails: usageEvent?.stopDetails,
+            }),
+          );
+        } catch (e) {
+          // Observational only. A malformed record must never cost the caller a
+          // turn that otherwise completed.
+          debugLog("diagnostics.failed", { error: formatSafeError(e) });
         }
         stream.push({ type: "done", reason: output.stopReason as "stop" | "toolUse", message: output });
         debugLog("response.done", {
