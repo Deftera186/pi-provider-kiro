@@ -17,6 +17,37 @@ import type { KiroUsage, KiroUsageProvenance } from "../src/token-usage.js";
 import { EMPTY_CONTENT_PLACEHOLDER, type KiroHistoryEntry } from "../src/transform.js";
 import { concatMessages, encodeEventMessage } from "./helpers/event-stream.js";
 
+/**
+ * Lets one test make the diagnostics append throw, to exercise the provider's
+ * fail-open guard.
+ *
+ * `vi.spyOn` cannot seam this: `stream.ts` reaches the helper through
+ * `import * as PiAi`, and an ES module namespace object has non-configurable
+ * properties, so redefining one throws `Cannot redefine property`. Hence a
+ * module mock — but a pass-through one, spreading the real exports and
+ * delegating to the real implementation unless `fail` is set. Every other test
+ * in this file therefore runs against unmodified pi-ai.
+ *
+ * `vi.hoisted` because `vi.mock` is hoisted above ordinary declarations.
+ */
+const diagnosticsAppend = vi.hoisted(() => ({ fail: false }));
+vi.mock("@earendil-works/pi-ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-ai")>();
+  return {
+    ...actual,
+    appendAssistantMessageDiagnostic: (
+      ...args: Parameters<typeof actual.appendAssistantMessageDiagnostic>
+    ): ReturnType<typeof actual.appendAssistantMessageDiagnostic> => {
+      if (diagnosticsAppend.fail) {
+        // Shaped like the real failure: on a host older than the 0.80.10 peer
+        // minimum the export is absent, so the call site throws this.
+        throw new TypeError("PiAi.appendAssistantMessageDiagnostic is not a function");
+      }
+      return actual.appendAssistantMessageDiagnostic(...args);
+    },
+  };
+});
+
 const ts = Date.now();
 const zeroUsage = {
   input: 0,
@@ -3758,6 +3789,7 @@ describe("Feature 9: Streaming Integration", () => {
 describe("turn provenance diagnostic", () => {
   beforeEach(() => {
     resetProfileArnCache(true);
+    diagnosticsAppend.fail = false;
   });
 
   /** The single provenance diagnostic on a terminal message. */
@@ -4041,5 +4073,33 @@ describe("turn provenance diagnostic", () => {
 
     expect(msg?.stopReason).toBe("error");
     expect((msg?.diagnostics ?? []).some((d) => d.type === "kiro_turn_provenance")).toBe(false);
+  });
+
+  it("completes the turn when the diagnostics append throws", async () => {
+    // Fail open. The record is observational, so it must never cost the caller a
+    // turn that otherwise finished. This is reachable in production, not
+    // hypothetical: pi-ai is a devDependency here and the HOST supplies it at
+    // runtime, so a host older than the 0.80.10 peer minimum has no
+    // `appendAssistantMessageDiagnostic` and the call throws TypeError. Without
+    // the guard, `streamKiro`'s outer catch turns a complete answer into
+    // stopReason:"error" with no content.
+    diagnosticsAppend.fail = true;
+    const mockFetch = mockFetchChunked(['{"content":"Answer"}', '{"contextUsagePercentage":12}']);
+    vi.stubGlobal("fetch", mockFetch);
+
+    const events = await collect(streamKiro(makeModel(), makeContext(), { apiKey: "tok" }));
+    vi.unstubAllGlobals();
+
+    // The turn still ends normally: done, not error.
+    expect(events.some((e) => e.type === "error")).toBe(false);
+    const done = events.find((e) => e.type === "done");
+    expect(done).toBeDefined();
+    const msg = done?.type === "done" ? done.message : undefined;
+    expect(msg?.stopReason).toBe("stop");
+    expect((msg?.content[0] as TextContent).text).toBe("Answer");
+    // Usage still finalized — the throw happens after it, and must not undo it.
+    expect((msg?.usage as KiroUsage).contextPercent).toBe(12);
+    // Only the diagnostic is lost.
+    expect(msg?.diagnostics ?? []).toEqual([]);
   });
 });
