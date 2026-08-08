@@ -3907,6 +3907,30 @@ describe("turn provenance diagnostic", () => {
     expect("modeled" in stopReason).toBe(false);
   });
 
+  it("records MAX_TOKENS, which this provider emits as a natural completion", async () => {
+    // pi has a "length" member for truncation, but the emitted value never comes
+    // from the wire: with a contextUsage frame and no tool calls the branch emits
+    // "stop". So a truncated answer is indistinguishable from a finished one
+    // unless the consumer reads the modeled value.
+    const { msg } = await run([
+      '{"content":"A partial ans"}',
+      '{"stopReason":"MAX_TOKENS"}',
+      '{"contextUsagePercentage":42}',
+    ]);
+
+    expect(msg?.stopReason).toBe("stop");
+    expect(stopReasonOf(msg)).toEqual({ emitted: "stop", source: "inferred", modeled: "MAX_TOKENS" });
+  });
+
+  it("records UNKNOWN distinctly from no modeled stop reason arriving", async () => {
+    // "the service could not classify this turn" is not the same fact as "the
+    // service never sent a stop reason", and both emit the same pi stopReason.
+    const { msg } = await run(['{"content":"Hi"}', '{"stopReason":"UNKNOWN"}', '{"contextUsagePercentage":5}']);
+
+    expect(stopReasonOf(msg).modeled).toBe("UNKNOWN");
+    expect(stopReasonOf(msg).contextOverflow).toBeUndefined();
+  });
+
   it("carries a CONTENT_FILTERED refusal, which also arrives on a successful turn", async () => {
     // Modeled as a metadataEvent, not a typed error: nothing on the error path
     // sees it, and pi's emitted stopReason has no member for it.

@@ -134,15 +134,22 @@ describe("createKiroTurnProvenanceDiagnostic", () => {
     }
   });
 
-  it("names every wire stop reason pi's emitted vocabulary cannot express", () => {
+  it("names every wire stop reason whose occurrence the emitted value cannot reveal", () => {
     // CONTENT_FILTERED belongs here for the same reason as the overflow: the
     // service models a refusal as a *successful* metadataEvent carrying
     // stopDetails.refusal, not as a typed error, so no error path ever sees it.
-    // Source of truth: StopReason in the generated kiro-runtime client.
+    // MAX_TOKENS belongs here because this provider emits "stop" for it, not
+    // pi's "length"; UNKNOWN because "the service could not classify this turn"
+    // must stay distinguishable from no modeled value arriving at all. END_TURN
+    // and TOOL_USE are the only members left out, because the emitted value
+    // agrees with them by construction.
+    // Source of truth: StopReason in KiroRuntimeServiceModel tokenTypes.smithy.
     expect(KIRO_MODELED_STOP_REASONS).toEqual({
       contextWindowExceeded: "MODEL_CONTEXT_WINDOW_EXCEEDED",
       contentFiltered: "CONTENT_FILTERED",
       pauseTurn: "PAUSE_TURN",
+      maxTokens: "MAX_TOKENS",
+      unknown: "UNKNOWN",
     });
   });
 

@@ -28,8 +28,17 @@ export type KiroStopReasonSource = "modeled" | "inferred";
  * Wire `StopReason` values whose meaning is not recoverable from the stop
  * reason pi ends up emitting.
  *
- * Source of truth: `StopReason` in the generated Smithy client for the same
- * service (`@amzn/kiro-runtime-service-typescript-client`).
+ * Source of truth: `StopReason` in `KiroRuntimeServiceModel`
+ * (`src/main/smithy/types/conversation/tokenTypes.smithy`), surfaced through the
+ * generated client (`@amzn/kiro-runtime-service-typescript-client`).
+ *
+ * "Not recoverable" is about this provider's emitted value, not about pi's type.
+ * The emitted `stopReason` is reconstructed from tool calls and whether a
+ * `contextUsageEvent` arrived — `rawStopReason` is never consulted — so a wire
+ * value only belongs here if reading the emitted value cannot tell you it
+ * happened. `END_TURN` and `TOOL_USE` are omitted because the emitted value
+ * agrees with them by construction whenever a contextUsage frame arrived. Every
+ * other member is listed.
  */
 export const KIRO_MODELED_STOP_REASONS = {
   /**
@@ -55,6 +64,24 @@ export const KIRO_MODELED_STOP_REASONS = {
   contentFiltered: "CONTENT_FILTERED",
   /** The wire origin of pi 0.83.0's `"pending"`; earlier peers have no slot for it. */
   pauseTurn: "PAUSE_TURN",
+  /**
+   * The model hit its output token limit.
+   *
+   * pi's vocabulary *does* have a member for this — `"length"` — but this
+   * provider never routes it there: the emitted value is `"stop"` for any turn
+   * with no tool calls once a contextUsage frame has arrived, and `"length"`
+   * only when that frame is absent. So a truncated answer is emitted as a
+   * natural completion, and the two are told apart only by this field.
+   */
+  maxTokens: "MAX_TOKENS",
+  /**
+   * The provider returned a stop reason the service itself did not recognize.
+   *
+   * Named so a consumer can distinguish "the service explicitly could not
+   * classify this turn" from `modeled` being absent, which means no
+   * `metadataEvent` stop reason arrived at all.
+   */
+  unknown: "UNKNOWN",
 } as const;
 
 /**
