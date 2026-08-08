@@ -29,6 +29,10 @@ export { resolveApiRegion } from "./endpoints.js";
 export type { KiroStreamEvent } from "./event-parser.js";
 export { KIRO_MODEL_IDS, kiroModels, resolveKiroModel } from "./models.js";
 export { streamKiro } from "./stream.js";
+// The value vocabulary for the provenance diagnostic's `details.usage`. Exported
+// alongside the stop-reason record types so a consumer can name BOTH halves of
+// the payload rather than re-declaring the union it has to switch on.
+export type { KiroUsage, KiroUsageProvenance, KiroUsageSource } from "./token-usage.js";
 
 /**
  * Host-driven catalog refresh. `oauth.modifyModels` only projects whatever the

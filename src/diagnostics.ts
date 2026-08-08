@@ -41,6 +41,18 @@ export const KIRO_MODELED_STOP_REASONS = {
    * to read this field to find out.
    */
   contextWindowExceeded: "MODEL_CONTEXT_WINDOW_EXCEEDED",
+  /**
+   * A content-policy refusal, also delivered as a *successful* stop reason.
+   *
+   * The service models a refusal as `MetadataEvent { stopReason:
+   * CONTENT_FILTERED, stopDetails: { refusal: { category, explanation,
+   * recommendedModel } } }` rather than as a `ValidationException` — the request
+   * was valid and the model did respond, it just declined. So this shares the
+   * invisibility of {@link contextWindowExceeded}: nothing on the error path
+   * ever sees it, and pi's emitted `stopReason` has no member for it either.
+   * The `refusal` payload rides {@link KiroStopReasonRecord.details}.
+   */
+  contentFiltered: "CONTENT_FILTERED",
   /** The wire origin of pi 0.83.0's `"pending"`; earlier peers have no slot for it. */
   pauseTurn: "PAUSE_TURN",
 } as const;
@@ -110,6 +122,13 @@ export interface KiroTurnProvenanceInput {
  *
  * Absent optional fields are omitted rather than written as null, so a consumer
  * can distinguish "the service never said" from "the service said nothing".
+ *
+ * The usage provenance is copied rather than referenced. The object handed in
+ * lives on `usage.provenance`, i.e. elsewhere on the same message, and this
+ * record is a point-in-time statement about a turn that has finished: sharing
+ * the reference would let a later write to `usage.provenance` silently rewrite
+ * what the diagnostic claims, and would make any test asserting the two agree
+ * unable to fail.
  */
 export function createKiroTurnProvenanceDiagnostic(input: KiroTurnProvenanceInput): AssistantMessageDiagnostic {
   const stopReason: KiroStopReasonRecord = {
@@ -123,7 +142,7 @@ export function createKiroTurnProvenanceDiagnostic(input: KiroTurnProvenanceInpu
     type: KIRO_TURN_PROVENANCE_DIAGNOSTIC,
     timestamp: Date.now(),
     details: {
-      ...(input.usage !== undefined ? { usage: input.usage } : {}),
+      ...(input.usage !== undefined ? { usage: { ...input.usage } } : {}),
       stopReason,
     },
   };

@@ -3884,6 +3884,61 @@ describe("turn provenance diagnostic", () => {
     expect(stopReasonOf(msg).emitted).toBe("toolUse");
   });
 
+  it("exposes the emitted value contradicting the wire when no contextUsage frame arrives", async () => {
+    // receivedContextUsage only flips on a contextUsageEvent frame, so a
+    // metadataEvent-only stream makes the local branch emit "length" while the
+    // service plainly said END_TURN. This contradiction is the whole point of
+    // recording the modeled value: without it the fabricated "length" is
+    // indistinguishable from a real one.
+    const { msg } = await run(['{"content":"Hi"}', '{"stopReason":"END_TURN"}']);
+
+    expect(msg?.stopReason).toBe("length");
+    expect(stopReasonOf(msg)).toEqual({ emitted: "length", source: "inferred", modeled: "END_TURN" });
+  });
+
+  it("records a fabricated length with no modeled value to contradict it", async () => {
+    // Same emitted value, but the service said nothing at all. A consumer must
+    // be able to tell this apart from the case above.
+    const { msg } = await run(['{"content":"Hi"}']);
+
+    expect(msg?.stopReason).toBe("length");
+    const stopReason = stopReasonOf(msg);
+    expect(stopReason).toEqual({ emitted: "length", source: "inferred" });
+    expect("modeled" in stopReason).toBe(false);
+  });
+
+  it("carries a CONTENT_FILTERED refusal, which also arrives on a successful turn", async () => {
+    // Modeled as a metadataEvent, not a typed error: nothing on the error path
+    // sees it, and pi's emitted stopReason has no member for it.
+    const { msg, terminal } = await run([
+      '{"content":"I can\'t help with that."}',
+      '{"stopReason":"CONTENT_FILTERED","stopDetails":{"refusal":{"category":"CYBER","explanation":"policy"}}}',
+      '{"contextUsagePercentage":4}',
+    ]);
+
+    expect(terminal).toBe("done");
+    expect(msg?.errorMessage).toBeUndefined();
+    const stopReason = stopReasonOf(msg);
+    expect(stopReason.emitted).toBe("stop");
+    expect(stopReason.modeled).toBe("CONTENT_FILTERED");
+    expect(stopReason.details).toEqual({ refusal: { category: "CYBER", explanation: "policy" } });
+  });
+
+  it("snapshots the provenance so a later write to usage.provenance cannot rewrite it", async () => {
+    const { msg } = await run([
+      '{"content":"Hello"}',
+      JSON.stringify({ tokenUsage: { uncachedInputTokens: 10, outputTokens: 5, totalTokens: 15 } }),
+    ]);
+
+    const recorded = provenanceOf(msg).details?.usage as KiroUsageProvenance;
+    const live = (msg?.usage as KiroUsage).provenance as KiroUsageProvenance;
+    expect(recorded).not.toBe(live);
+    expect(recorded).toEqual(live);
+
+    live.input = "estimated";
+    expect((provenanceOf(msg).details?.usage as KiroUsageProvenance).input).toBe("measured");
+  });
+
   it("attaches exactly one record even when an earlier attempt was retried", async () => {
     // The record describes the turn that completed, not each attempt.
     const empty = mockFetchOk("");

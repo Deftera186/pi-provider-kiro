@@ -66,6 +66,20 @@ describe("createKiroTurnProvenanceDiagnostic", () => {
     expect("usage" in (make().details ?? {})).toBe(false);
   });
 
+  it("snapshots the usage provenance instead of aliasing the caller's object", () => {
+    // The object handed in lives on `usage.provenance`, elsewhere on the same
+    // message. A shared reference would let a later write rewrite what this
+    // record claims about a turn that already finished.
+    const live: KiroUsageProvenance = { input: "measured", output: "estimated" };
+    const d = make({ usage: live });
+    expect(d.details?.usage).not.toBe(live);
+    expect(d.details?.usage).toEqual(live);
+
+    live.input = "derived";
+    live.cache = "measured";
+    expect(d.details?.usage).toEqual({ input: "measured", output: "estimated" });
+  });
+
   it("reports the emitted stop reason with the source the caller supplied", () => {
     expect(make({ stopReason: "toolUse", stopReasonSource: "inferred" }).details?.stopReason).toEqual({
       emitted: "toolUse",
@@ -118,6 +132,32 @@ describe("createKiroTurnProvenanceDiagnostic", () => {
       const stopReason = make({ rawStopReason: raw }).details?.stopReason as Record<string, unknown>;
       expect(stopReason.contextOverflow).toBeUndefined();
     }
+  });
+
+  it("names every wire stop reason pi's emitted vocabulary cannot express", () => {
+    // CONTENT_FILTERED belongs here for the same reason as the overflow: the
+    // service models a refusal as a *successful* metadataEvent carrying
+    // stopDetails.refusal, not as a typed error, so no error path ever sees it.
+    // Source of truth: StopReason in the generated kiro-runtime client.
+    expect(KIRO_MODELED_STOP_REASONS).toEqual({
+      contextWindowExceeded: "MODEL_CONTEXT_WINDOW_EXCEEDED",
+      contentFiltered: "CONTENT_FILTERED",
+      pauseTurn: "PAUSE_TURN",
+    });
+  });
+
+  it("carries a refusal's stopDetails through, since it rides a successful turn", () => {
+    const refusal = { refusal: { category: "CYBER", explanation: "no", recommendedModel: "other" } };
+    const d = make({
+      stopReason: "stop",
+      rawStopReason: KIRO_MODELED_STOP_REASONS.contentFiltered,
+      stopDetails: refusal,
+    });
+    const stopReason = d.details?.stopReason as Record<string, unknown>;
+    expect(stopReason.modeled).toBe("CONTENT_FILTERED");
+    expect(stopReason.details).toEqual(refusal);
+    // A refusal is not an overflow; only the overflow gets the compaction flag.
+    expect(stopReason.contextOverflow).toBeUndefined();
   });
 
   it("carries PAUSE_TURN through even though this peer has no stopReason for it", () => {
