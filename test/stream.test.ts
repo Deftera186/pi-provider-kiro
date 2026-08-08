@@ -4075,6 +4075,39 @@ describe("turn provenance diagnostic", () => {
     expect((msg?.diagnostics ?? []).some((d) => d.type === "kiro_turn_provenance")).toBe(false);
   });
 
+  it("does not attach a provenance record to an aborted turn", async () => {
+    // An abort mid-stream leaves the turn's numbers unsettled: usage was never
+    // finalized and no stop reason was reconstructed, so there is nothing
+    // truthful to record. Distinct from the 500 case above because the abort
+    // arrives *after* content streamed, i.e. the furthest a turn can get and
+    // still not reach the append.
+    const ac = new AbortController();
+    let readCount = 0;
+    const readMock = vi.fn().mockImplementation(async () => {
+      readCount++;
+      if (readCount === 1) return { done: false, value: encodeBody('{"content":"partial"}') };
+      ac.abort();
+      throw new DOMException("The operation was aborted", "AbortError");
+    });
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      body: { getReader: () => ({ read: readMock, releaseLock: () => {} }), cancel: async () => {} },
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const events = await collect(
+      streamKiro(makeModel({ reasoning: false }), makeContext(), { apiKey: "tok", signal: ac.signal }),
+    );
+    vi.unstubAllGlobals();
+
+    const error = events.find((e) => e.type === "error");
+    const msg = error?.type === "error" ? error.error : undefined;
+    expect(msg?.stopReason).toBe("aborted");
+    expect((msg?.diagnostics ?? []).some((d) => d.type === "kiro_turn_provenance")).toBe(false);
+    // No terminal done either — the record and the done event share one site.
+    expect(events.some((e) => e.type === "done")).toBe(false);
+  });
+
   it("completes the turn when the diagnostics append throws", async () => {
     // Fail open. The record is observational, so it must never cost the caller a
     // turn that otherwise finished. This is reachable in production, not
