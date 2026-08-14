@@ -22,7 +22,11 @@ import { UniversalEventStreamMarshaller } from "@smithy/core/event-streams";
 import type { Message } from "@smithy/types";
 import { parseBracketToolCalls } from "./bracket-tool-parser.js";
 import { debugEnabled, debugLog, formatSafeError, redactSensitiveText } from "./debug.js";
-import { createKiroTurnProvenanceDiagnostic } from "./diagnostics.js";
+import {
+  createKiroTurnProvenanceDiagnostic,
+  type KiroStopReasonSource,
+  mapModeledStopReason,
+} from "./diagnostics.js";
 import {
   buildKiroAdditionalModelRequestFields,
   getKiroEffortConfig,
@@ -582,7 +586,14 @@ export function streamKiro(
         // `usage` outlives this loop; clear whatever a previous attempt reported
         // so a failed attempt's counts cannot survive into this one.
         resetKiroUsage(usage);
-        let receivedContextUsage = false;
+        // True once a frame arrived that says the turn reached a settled state
+        // rather than being cut off mid-flight: a contextUsageEvent or a
+        // metadataEvent. Distinct from the numbers those frames carry — this is
+        // purely the "the service got to the end of this turn" signal that the
+        // no-modeled-stop-reason fallback needs. It used to be spelled
+        // `receivedContextUsage`, which conflated the two and left every
+        // metadataEvent-only stream looking truncated.
+        let sawSettlingFrame = false;
         const thinkingParser = thinkingEnabled ? new ThinkingTagParser(output, stream) : null;
         let nativeThinkingBlockIndex: number | null = null;
         let nativeThinkingEnded = false;
@@ -710,7 +721,7 @@ export function streamKiro(
               // keeps live context% moving mid-turn. The input count it derives
               // is superseded by the measured one in finalizeKiroUsage().
               applyContextUsage(usage, event.data.contextUsagePercentage, model.contextWindow);
-              receivedContextUsage = true;
+              sawSettlingFrame = true;
               break;
             }
             case "thinkingText": {
@@ -778,6 +789,7 @@ export function streamKiro(
               // later partial frame cannot erase counts already received.
               const prev: KiroUsageData = usageEvent ?? {};
               usageEvent = { ...prev, ...event.data };
+              sawSettlingFrame = true;
               break;
             }
             case "metering": {
@@ -946,30 +958,51 @@ export function streamKiro(
         // when all tool calls were skipped due to empty/unparseable input — that
         // combination (empty content + toolUse stop) causes pi's agent loop to
         // stall waiting for tool results that will never arrive.
-        if (!receivedContextUsage && emittedToolCalls === 0) {
+        //
+        // Precedence: an emitted tool call outranks everything, because the
+        // deltas are already on the stream and cannot be retracted — the caller
+        // has to be told to run them. Then the service's own `stopReason`, when
+        // this peer has a member that means the same thing. Only then the local
+        // reconstruction.
+        const modeledStopReason = mapModeledStopReason(usageEvent?.rawStopReason);
+        let stopReasonSource: KiroStopReasonSource = "inferred";
+        if (emittedToolCalls > 0) {
+          output.stopReason = "toolUse";
+          // Agrees with the wire only if the service also said TOOL_USE; when it
+          // said something else, the emitted value is this provider's decision.
+          if (modeledStopReason === "toolUse") stopReasonSource = "modeled";
+        } else if (modeledStopReason !== undefined) {
+          // `toolUse` is unreachable here: it is gated on an emitted tool call,
+          // and this branch runs only when there is none.
+          output.stopReason = modeledStopReason === "toolUse" ? "stop" : modeledStopReason;
+          stopReasonSource = modeledStopReason === "toolUse" ? "inferred" : "modeled";
+        } else if (!sawSettlingFrame) {
+          // No modeled stop reason and nothing to say the turn ever settled:
+          // treat it as cut off. `sawSettlingFrame` — not `receivedContextUsage`
+          // — because a metadataEvent settles the turn just as well, and reading
+          // only the contextUsage frame here fabricated `"length"` on any
+          // metadataEvent-only stream. That fabrication is not cosmetic: it makes
+          // wasPreviousResponseTruncated() prepend TRUNCATION_NOTICE to the next
+          // turn, asking the model to continue an answer it had finished.
           output.stopReason = "length";
         } else {
-          output.stopReason = emittedToolCalls > 0 ? "toolUse" : "stop";
+          output.stopReason = "stop";
         }
         // Record where this turn's numbers came from. `usage.provenance` and the
         // modeled stop reason are both invisible in the emitted message: the
         // usage numbers are a flat bag with no room to say whether a figure was
-        // measured or invented, and `MetadataEvent.stopReason` has no slot in
-        // pi's `stopReason` vocabulary at this peer. diagnostics[] is the only
-        // structured channel out of here — streamKiro never rejects, it encodes
-        // outcomes into the stream.
-        //
-        // `stopReasonSource` is `inferred` because the branch above still
-        // reconstructs the emitted value from tool calls and contextUsage
-        // arrival. It becomes `modeled` when that branch consumes
-        // `rawStopReason`, which is a separate change.
+        // measured or invented, and several `MetadataEvent.stopReason` members
+        // have no slot in pi's `stopReason` vocabulary at this peer (refusals,
+        // PAUSE_TURN, context overflow — see mapModeledStopReason). diagnostics[]
+        // is the only structured channel out of here — streamKiro never rejects,
+        // it encodes outcomes into the stream.
         try {
           PiAi.appendAssistantMessageDiagnostic(
             output,
             createKiroTurnProvenanceDiagnostic({
               usage: usage.provenance,
               stopReason: output.stopReason,
-              stopReasonSource: "inferred",
+              stopReasonSource,
               rawStopReason: usageEvent?.rawStopReason,
               stopDetails: usageEvent?.stopDetails,
             }),

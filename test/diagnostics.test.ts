@@ -7,6 +7,7 @@ import {
   isModeledContextOverflowStopReason,
   KIRO_MODELED_STOP_REASONS,
   KIRO_TURN_PROVENANCE_DIAGNOSTIC,
+  mapModeledStopReason,
 } from "../src/diagnostics.js";
 import type { KiroUsageProvenance } from "../src/token-usage.js";
 
@@ -197,6 +198,57 @@ describe("isModeledContextOverflowStopReason", () => {
   it("rejects other stop reasons and an absent one", () => {
     for (const raw of ["END_TURN", "MAX_TOKENS", "PAUSE_TURN", undefined]) {
       expect(isModeledContextOverflowStopReason(raw)).toBe(false);
+    }
+  });
+});
+
+describe("mapModeledStopReason", () => {
+  it("maps the three members pi has a faithful slot for", () => {
+    expect(mapModeledStopReason(KIRO_MODELED_STOP_REASONS.endTurn)).toBe("stop");
+    expect(mapModeledStopReason(KIRO_MODELED_STOP_REASONS.toolUse)).toBe("toolUse");
+    expect(mapModeledStopReason(KIRO_MODELED_STOP_REASONS.maxTokens)).toBe("length");
+  });
+
+  it("declines the members this peer cannot express", () => {
+    // Returning undefined is load-bearing: it is what keeps the caller reporting
+    // `source: "inferred"` instead of passing off a local decision as modeled.
+    for (const member of [
+      KIRO_MODELED_STOP_REASONS.contentFiltered,
+      KIRO_MODELED_STOP_REASONS.pauseTurn,
+      KIRO_MODELED_STOP_REASONS.unknown,
+    ]) {
+      expect(mapModeledStopReason(member)).toBeUndefined();
+    }
+  });
+
+  it("declines the overflow member so it cannot invite a continuation", () => {
+    // "length" would reach wasPreviousResponseTruncated() and ask the model to
+    // continue, growing the context that just overflowed.
+    expect(mapModeledStopReason(KIRO_MODELED_STOP_REASONS.contextWindowExceeded)).toBeUndefined();
+  });
+
+  it("declines an absent or unrecognized stop reason", () => {
+    expect(mapModeledStopReason(undefined)).toBeUndefined();
+    expect(mapModeledStopReason("")).toBeUndefined();
+    expect(mapModeledStopReason("SOMETHING_NEW")).toBeUndefined();
+    // Lowercase is not the wire spelling; accepting it would invent a mapping.
+    expect(mapModeledStopReason("end_turn")).toBeUndefined();
+  });
+
+  it("only ever returns a member of pi's vocabulary", () => {
+    const piVocabulary = ["stop", "length", "toolUse", "error", "aborted"];
+    for (const member of Object.values(KIRO_MODELED_STOP_REASONS)) {
+      const mapped = mapModeledStopReason(member);
+      if (mapped !== undefined) expect(piVocabulary).toContain(mapped);
+    }
+  });
+
+  it("never maps a member onto error or aborted", () => {
+    // Both describe a turn that failed or was cancelled. Every modeled stop
+    // reason arrives on a 200 with content already streamed, so routing one
+    // there would turn a completed turn into a failed one.
+    for (const member of Object.values(KIRO_MODELED_STOP_REASONS)) {
+      expect(["error", "aborted"]).not.toContain(mapModeledStopReason(member));
     }
   });
 });

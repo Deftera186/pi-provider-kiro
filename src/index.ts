@@ -24,6 +24,7 @@ export {
   isModeledContextOverflowStopReason,
   KIRO_MODELED_STOP_REASONS,
   KIRO_TURN_PROVENANCE_DIAGNOSTIC,
+  mapModeledStopReason,
 } from "./diagnostics.js";
 export { resolveApiRegion } from "./endpoints.js";
 export type { KiroStreamEvent } from "./event-parser.js";

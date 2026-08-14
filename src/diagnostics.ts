@@ -1,7 +1,7 @@
 // ABOUTME: Per-turn provenance diagnostic carrying usage sources and the modeled stop reason.
 // ABOUTME: diagnostics[] is the only structured channel out of streamKiro, which never rejects.
 
-import type { AssistantMessageDiagnostic } from "@earendil-works/pi-ai";
+import type { AssistantMessageDiagnostic, StopReason } from "@earendil-works/pi-ai";
 import type { KiroUsageProvenance } from "./token-usage.js";
 
 /**
@@ -20,7 +20,10 @@ export const KIRO_TURN_PROVENANCE_DIAGNOSTIC = "kiro_turn_provenance";
  * - `modeled` — `MetadataEvent.stopReason` arrived on the wire and the emitted
  *   value reflects it.
  * - `inferred` — reconstructed locally from emitted tool calls and whether a
- *   contextUsage event arrived. Usually right, but a guess.
+ *   contextUsage event arrived. Usually right, but a guess. Also used when a
+ *   modeled stop reason *did* arrive but pi's vocabulary has no faithful member
+ *   for it, so the emitted value cannot reflect it (see
+ *   {@link mapModeledStopReason}).
  */
 export type KiroStopReasonSource = "modeled" | "inferred";
 
@@ -35,10 +38,9 @@ export type KiroStopReasonSource = "modeled" | "inferred";
  * members are listed; the map is exhaustive by intent, and its test asserts that
  * by exact equality.
  *
- * None of these is reliably recoverable from the `stopReason` this provider
- * emits, because that value is reconstructed from emitted tool calls and whether
- * a `contextUsageEvent` arrived — `rawStopReason` is never consulted. Each member
- * documents how the emitted value can disagree with it.
+ * {@link mapModeledStopReason} translates the members pi has a member for; the
+ * rest remain recoverable only from this record, because pi's vocabulary has
+ * nowhere to put them. Each member below documents which case it is.
  */
 export const KIRO_MODELED_STOP_REASONS = {
   /**
@@ -47,7 +49,9 @@ export const KIRO_MODELED_STOP_REASONS = {
    * It arrives on a 200 with no error body, so the prose-matching
    * `isContextOverflow()` path never sees it and the turn looks like a normal
    * completion that simply stopped early. A consumer that needs to compact has
-   * to read this field to find out.
+   * to read this field to find out — {@link mapModeledStopReason} deliberately
+   * declines to route it to pi's `"length"`, because that member asks for a
+   * continuation, which is the one thing an overflowed context must not get.
    */
   contextWindowExceeded: "MODEL_CONTEXT_WINDOW_EXCEEDED",
   /**
@@ -67,11 +71,10 @@ export const KIRO_MODELED_STOP_REASONS = {
   /**
    * The model hit its output token limit.
    *
-   * pi's vocabulary *does* have a member for this — `"length"` — but this
-   * provider never routes it there: the emitted value is `"stop"` for any turn
-   * with no tool calls once a contextUsage frame has arrived, and `"length"`
-   * only when that frame is absent. So a truncated answer is emitted as a
-   * natural completion, and the two are told apart only by this field.
+   * pi's vocabulary has a member for exactly this — `"length"` — and
+   * {@link mapModeledStopReason} routes it there, so a truncated answer is
+   * emitted as truncated and `wasPreviousResponseTruncated()` can offer the
+   * continuation the turn actually needs.
    */
   maxTokens: "MAX_TOKENS",
   /**
@@ -85,22 +88,61 @@ export const KIRO_MODELED_STOP_REASONS = {
   /**
    * The model finished naturally.
    *
-   * The emitted value agrees (`"stop"`) only once a `contextUsageEvent` has
-   * arrived. A `metadataEvent`-only stream leaves `receivedContextUsage` false,
-   * so the emitted value is `"length"` while the service said it finished — a
-   * fabricated truncation that only this field contradicts.
+   * Routed to pi's `"stop"`. Before the modeled value was consulted, a
+   * `metadataEvent`-only stream left `receivedContextUsage` false and the turn
+   * was emitted as `"length"` — a fabricated truncation that made
+   * `wasPreviousResponseTruncated()` prepend a continuation notice to the next
+   * turn.
    */
   endTurn: "END_TURN",
   /**
    * The model is requesting tool use.
    *
-   * The emitted value agrees (`"toolUse"`) only when at least one tool call was
-   * actually emitted. A turn whose tool calls all had empty or unparseable input
-   * emits `"stop"` deliberately — that combination stalls pi's agent loop — so
-   * the service's `TOOL_USE` survives only here.
+   * Routed to pi's `"toolUse"` only when at least one tool call was actually
+   * emitted. A turn whose tool calls all had empty or unparseable input emits
+   * `"stop"` deliberately — that combination stalls pi's agent loop waiting for
+   * results that will never arrive — so in that case the service's `TOOL_USE`
+   * survives only here.
    */
   toolUse: "TOOL_USE",
 } as const;
+
+/**
+ * Translate a modeled wire `StopReason` into pi's `StopReason` vocabulary.
+ *
+ * Returns `undefined` when this peer has no member that means the same thing.
+ * The caller then keeps its local reconstruction and reports
+ * `stopReasonSource: "inferred"`, so an unmappable member never masquerades as
+ * a modeled emission. The unmapped members are:
+ *
+ * - `CONTENT_FILTERED` — a refusal. `"error"` would be wrong (the request was
+ *   valid and the model did respond) and pi has no refusal member, so the
+ *   category/explanation payload stays in {@link KiroStopReasonRecord.details}.
+ * - `PAUSE_TURN` — pi 0.83.0 spells this `"pending"`; at this peer there is no
+ *   member, and `"stop"` at least ends the turn rather than stalling it.
+ * - `MODEL_CONTEXT_WINDOW_EXCEEDED` — see
+ *   {@link KIRO_MODELED_STOP_REASONS.contextWindowExceeded}: `"length"` invites
+ *   a continuation that would grow the very context that overflowed. Consumers
+ *   detect it with {@link isModeledContextOverflowStopReason}.
+ * - `UNKNOWN` — the service itself could not classify the turn, so there is
+ *   nothing to translate.
+ *
+ * `TOOL_USE` maps to `"toolUse"`, but the caller must still gate that on having
+ * actually emitted a tool call: emitting `"toolUse"` with no tool call on the
+ * message stalls pi's agent loop.
+ */
+export function mapModeledStopReason(rawStopReason: string | undefined): StopReason | undefined {
+  switch (rawStopReason) {
+    case KIRO_MODELED_STOP_REASONS.endTurn:
+      return "stop";
+    case KIRO_MODELED_STOP_REASONS.toolUse:
+      return "toolUse";
+    case KIRO_MODELED_STOP_REASONS.maxTokens:
+      return "length";
+    default:
+      return undefined;
+  }
+}
 
 /**
  * True when the modeled stop reason says the context window overflowed.
