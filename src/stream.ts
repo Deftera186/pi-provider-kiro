@@ -45,6 +45,7 @@ import {
   resetKiroProfileArnCache,
   resolveKiroProfileArn,
 } from "./management.js";
+import { kiroAuthHeaders } from "./oauth.js";
 import { resolveKiroModel } from "./models.js";
 import {
   capacityRetryConfig,
@@ -582,7 +583,7 @@ export function streamKiro(
             headers: {
               "Content-Type": "application/json",
               Accept: "application/vnd.amazon.eventstream",
-              Authorization: `Bearer ${accessToken}`,
+              ...kiroAuthHeaders(accessToken),
               "x-amzn-codewhisperer-optout": "true",
               "amz-sdk-invocation-id": crypto.randomUUID(),
               "amz-sdk-request": "attempt=1; max=1",
