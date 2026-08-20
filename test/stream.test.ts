@@ -798,6 +798,123 @@ describe("Feature 9: Streaming Integration", () => {
     vi.unstubAllGlobals();
   });
 
+  it("preserves multiple thinking regions through the streamed response", async () => {
+    const mockFetch = mockFetchChunked([
+      '{"content":"<thinking>first</thinking>\\n\\nmid<rea"}',
+      '{"content":"soning>second</reasoning>\\n\\nend"}',
+      '{"contextUsagePercentage":15}',
+    ]);
+    vi.stubGlobal("fetch", mockFetch);
+
+    const stream = streamKiro(makeModel({ reasoning: true }), makeContext(), { apiKey: "tok" });
+    const events = await collect(stream);
+    const thinkingStarts = events.filter((event) => event.type === "thinking_start");
+    const thinkingEnds = events.filter((event) => event.type === "thinking_end");
+
+    expect(thinkingStarts.map((event) => event.contentIndex)).toEqual([0, 2]);
+    expect(thinkingEnds.map((event) => event.contentIndex)).toEqual([0, 2]);
+    expect(thinkingEnds.map((event) => event.content)).toEqual(["first", "second"]);
+
+    const textDeltas = events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => event.delta)
+      .join("");
+    expect(textDeltas).toBe("midend");
+    expect(textDeltas).not.toMatch(/<\/?(?:thinking|think|reasoning|thought)>/);
+
+    const textEnd = events.find((event) => event.type === "text_end");
+    expect(textEnd?.type === "text_end" && [textEnd.contentIndex, textEnd.content]).toEqual([3, "end"]);
+
+    const done = events.find((event) => event.type === "done");
+    const content = done?.type === "done" ? done.message.content : [];
+    expect(content).toEqual([
+      { type: "thinking", thinking: "first" },
+      { type: "text", text: "mid" },
+      { type: "thinking", thinking: "second" },
+      { type: "text", text: "end" },
+    ]);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("preserves empty first and later thinking regions through the streamed response", async () => {
+    const mockFetch = mockFetchChunked([
+      '{"content":"<thought></thought>mid<rea"}',
+      '{"content":"soning></reasoning>end"}',
+      '{"contextUsagePercentage":15}',
+    ]);
+    vi.stubGlobal("fetch", mockFetch);
+
+    const stream = streamKiro(makeModel({ reasoning: true }), makeContext(), { apiKey: "tok" });
+    const events = await collect(stream);
+    const thinkingStarts = events.filter((event) => event.type === "thinking_start");
+    const thinkingEnds = events.filter((event) => event.type === "thinking_end");
+
+    expect(thinkingStarts.map((event) => event.contentIndex)).toEqual([0, 2]);
+    expect(thinkingEnds.map((event) => event.contentIndex)).toEqual([0, 2]);
+    expect(thinkingEnds.map((event) => event.content)).toEqual(["", ""]);
+
+    const textDeltas = events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => event.delta)
+      .join("");
+    expect(textDeltas).toBe("midend");
+
+    const textEnd = events.find((event) => event.type === "text_end");
+    expect(textEnd?.type === "text_end" && [textEnd.contentIndex, textEnd.content]).toEqual([3, "end"]);
+
+    const done = events.find((event) => event.type === "done");
+    const content = done?.type === "done" ? done.message.content : [];
+    expect(content).toEqual([
+      { type: "thinking", thinking: "" },
+      { type: "text", text: "mid" },
+      { type: "thinking", thinking: "" },
+      { type: "text", text: "end" },
+    ]);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps one block per contentIndex when thinking arrives after text", async () => {
+    const mockFetch = mockFetchChunked([
+      '{"content":"Hello world"}',
+      '{"content":"<thinking>reasoning"}',
+      '{"content":"</thinking>"}',
+      '{"contextUsagePercentage":15}',
+    ]);
+    vi.stubGlobal("fetch", mockFetch);
+
+    const stream = streamKiro(makeModel({ reasoning: true }), makeContext(), { apiKey: "tok" });
+    const events = await collect(stream);
+    const census = events
+      .filter((e) => (e as { contentIndex?: number }).contentIndex !== undefined)
+      .map((e) => `${e.type}@${(e as { contentIndex: number }).contentIndex}`);
+
+    // The parser appends the thinking block, so the text block keeps index 0
+    // for the whole stream and `text_end` names the slot `text_start` opened.
+    // An earlier revision spliced thinking into index 0 and shifted the text
+    // block to 1, which emitted `thinking_start@0` over the already-announced
+    // text block and then `text_end@1` at a slot no `text_start` ever opened —
+    // an index-addressed consumer lost the text and threw on the close.
+    expect(census).toEqual([
+      "text_start@0",
+      "text_delta@0",
+      "thinking_start@1",
+      "thinking_delta@1",
+      "thinking_end@1",
+      "text_end@0",
+    ]);
+
+    const textEnd = events.find((e) => e.type === "text_end");
+    expect(textEnd?.type === "text_end" && textEnd.content).toBe("Hello world");
+
+    const done = events.find((e) => e.type === "done");
+    const content = done?.type === "done" ? done.message.content : [];
+    expect(content.map((b) => b.type)).toEqual(["text", "thinking"]);
+
+    vi.unstubAllGlobals();
+  });
+
   it("does not withhold the tail of plain text in reasoning mode", async () => {
     const mockFetch = mockFetchChunked(['{"content":"Hello world"}', '{"contextUsagePercentage":5}']);
     vi.stubGlobal("fetch", mockFetch);
