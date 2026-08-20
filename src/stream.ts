@@ -22,11 +22,7 @@ import { UniversalEventStreamMarshaller } from "@smithy/core/event-streams";
 import type { Message } from "@smithy/types";
 import { parseBracketToolCalls } from "./bracket-tool-parser.js";
 import { debugEnabled, debugLog, formatSafeError, redactSensitiveText } from "./debug.js";
-import {
-  createKiroTurnProvenanceDiagnostic,
-  type KiroStopReasonSource,
-  mapModeledStopReason,
-} from "./diagnostics.js";
+import { createKiroTurnProvenanceDiagnostic, type KiroStopReasonSource, mapModeledStopReason } from "./diagnostics.js";
 import {
   buildKiroAdditionalModelRequestFields,
   getKiroEffortConfig,
