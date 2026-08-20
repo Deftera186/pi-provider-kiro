@@ -30,6 +30,9 @@ importers:
       '@earendil-works/pi-tui':
         specifier: 0.80.10
         version: 0.80.10
+      '@smithy/types':
+        specifier: ^4.17.2
+        version: 4.17.2
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
