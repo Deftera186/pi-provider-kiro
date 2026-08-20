@@ -28,12 +28,35 @@ export {
 } from "./diagnostics.js";
 export { resolveApiRegion } from "./endpoints.js";
 export type { KiroStreamEvent } from "./event-parser.js";
+export {
+  isKiroToolStructureRule,
+  KIRO_TOOL_STRUCTURE_RULES,
+  KIRO_VALIDATION_MESSAGES,
+  type KiroRepairResult,
+  type KiroToolStructureRule,
+  type KiroValidationError,
+  type KiroValidationResult,
+  KiroValidationRule,
+  kiroConversationEntries,
+  repairKiroConversation,
+  SYNTHETIC_FAILED_TOOL_RESULT_TEXT,
+  validateKiroConversation,
+  validateKiroToolStructure,
+} from "./history-validator.js";
 export { KIRO_MODEL_IDS, kiroModels, resolveKiroModel } from "./models.js";
 export { streamKiro } from "./stream.js";
+
 // The value vocabulary for the provenance diagnostic's `details.usage`. Exported
 // alongside the stop-reason record types so a consumer can name BOTH halves of
 // the payload rather than re-declaring the union it has to switch on.
 export type { KiroUsage, KiroUsageProvenance, KiroUsageSource } from "./token-usage.js";
+export {
+  EMPTY_CONTENT_PLACEHOLDER,
+  type KiroHistoryEntry,
+  type KiroToolResult,
+  type KiroToolUse,
+  type KiroUserInputMessage,
+} from "./transform.js";
 
 /**
  * Host-driven catalog refresh. `oauth.modifyModels` only projects whatever the
