@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve every literal `<thinking>`, `<think>`, `<reasoning>`, or `<thought>` region in one streamed response as its own thinking block instead of leaking every region after the first into visible assistant text.
 - Keep parsed thinking blocks in the order the wire delivered them instead of splicing them ahead of text already emitted. The parser moved a thinking block into the index of an existing text block to make the content array read thinking → text, which made the persisted array contradict the stream and reused one `contentIndex` for two different blocks — an index-addressed consumer such as pi-mono's proxy transport overwrote the text it had already placed and then threw on the following `text_end`. Empty tagged regions are still materialized. Presentation order is unaffected: outbound history still prepends every thinking block, and renderers drive thinking from stream events.
 
+### Added
+
+- The entry module now re-exports `KiroManagementHttpError`. The class already shipped in 0.10.0 and is thrown by every management-plane request that returns a non-OK status (profile discovery, model catalog, usage limits) and already caught in `stream.ts`, where a 403 drives the credential-refresh retry — but it was not re-exported from `src/index.ts`, and there is no per-module file to deep-import instead: the build bundles the whole graph into one `dist/index.js`, and the published 0.10.0 tarball contains exactly `dist/index.js`, `package.json`, and `README.md`. Whatever `dist/index.js` re-exports is therefore the entire reachable surface, so a consumer wanting to branch on this error was left string-matching `error.name` or the message prose. No behaviour change and no new API: the class, its `status` field, and every throw and catch site are unchanged. Same entry-point caveat as the 0.10.0 re-exports below — this is the extension entry the pi host loads, not a resolvable npm entry point.
+
 ## [0.10.0] - 2026-08-16
 
 ### Fixed

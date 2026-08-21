@@ -31,6 +31,7 @@ export {
   validateKiroConversation,
   validateKiroToolStructure,
 } from "./history-validator.js";
+export { KiroManagementHttpError } from "./management.js";
 export { KIRO_MODEL_IDS, kiroModels, resolveKiroModel } from "./models.js";
 export { streamKiro } from "./stream.js";
 export {

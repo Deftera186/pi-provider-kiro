@@ -267,4 +267,16 @@ describe("Feature 1: Extension Registration", () => {
     expect(mod.SYNTHETIC_FAILED_TOOL_RESULT_TEXT).toBe("Tool use was interrupted and did not produce a result.");
     expect(mod.EMPTY_CONTENT_PLACEHOLDER).toBe("Please proceed with the task.");
   });
+
+  // Same entry-module caveat as above: this pins that the symbol leaves this
+  // module, so a consumer can `instanceof` the error the provider already
+  // throws from every management-plane request that returns a non-OK status.
+  // There is no per-module alternative — the build bundles everything into one
+  // `dist/index.js`, so what this module re-exports is the whole reachable
+  // surface and the fallback was string-matching `error.name` or the message.
+  it("re-exports KiroManagementHttpError from the entry module", async () => {
+    const mod = await import("../src/index.js");
+    const { KiroManagementHttpError } = await import("../src/management.js");
+    expect(mod.KiroManagementHttpError).toBe(KiroManagementHttpError);
+  });
 });
