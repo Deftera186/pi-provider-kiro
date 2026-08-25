@@ -523,7 +523,12 @@ describe("Feature 9: Streaming Integration", () => {
     const freshProfileArn = "arn:aws:codewhisperer:us-east-1:123:profile/FRESH";
     const mockFetch = vi
       .fn()
+      // Primary (us-east-1): stale token rejected
       .mockResolvedValueOnce({ ok: false, status: 403, statusText: "Forbidden" })
+      // Fallback (eu-central-1): stale token rejected there too — genuine auth rejection,
+      // so the probe rethrows 403 and the #107 newer-credential path engages
+      .mockResolvedValueOnce({ ok: false, status: 403, statusText: "Forbidden" })
+      // Re-probe with the newer kiro-cli token: profile found
       .mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ profiles: [{ arn: freshProfileArn }] }),
@@ -561,11 +566,14 @@ describe("Feature 9: Streaming Integration", () => {
     const events = await collect(streamKiro(makeModel(), makeContext(), { apiKey: "stale-token" }));
 
     expect(refreshSpy).not.toHaveBeenCalled();
-    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch).toHaveBeenCalledTimes(4);
     expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe("Bearer stale-token");
-    expect(mockFetch.mock.calls[1][1].headers.Authorization).toBe("Bearer fresh-token");
+    expect(mockFetch.mock.calls[0][0]).toBe("https://management.us-east-1.kiro.dev/List-Available-Profiles");
+    expect(mockFetch.mock.calls[1][1].headers.Authorization).toBe("Bearer stale-token");
+    expect(mockFetch.mock.calls[1][0]).toBe("https://management.eu-central-1.kiro.dev/List-Available-Profiles");
     expect(mockFetch.mock.calls[2][1].headers.Authorization).toBe("Bearer fresh-token");
-    expect(JSON.parse(mockFetch.mock.calls[2][1].body).profileArn).toBe(freshProfileArn);
+    expect(mockFetch.mock.calls[3][1].headers.Authorization).toBe("Bearer fresh-token");
+    expect(JSON.parse(mockFetch.mock.calls[3][1].body).profileArn).toBe(freshProfileArn);
     expect(events.find((event) => event.type === "done")).toBeDefined();
 
     getCredsSpy.mockRestore();
@@ -578,6 +586,7 @@ describe("Feature 9: Streaming Integration", () => {
     const freshProfileArn = "arn:aws:codewhisperer:us-east-1:123:profile/REFRESHED";
     const mockFetch = vi
       .fn()
+      .mockResolvedValueOnce({ ok: false, status: 403, statusText: "Forbidden" })
       .mockResolvedValueOnce({ ok: false, status: 403, statusText: "Forbidden" })
       .mockResolvedValueOnce({
         ok: true,
@@ -613,10 +622,11 @@ describe("Feature 9: Streaming Integration", () => {
     const events = await collect(streamKiro(makeModel(), makeContext(), { apiKey: "stale-token" }));
 
     expect(refreshSpy).toHaveBeenCalledOnce();
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe("Bearer stale-token");
-    expect(mockFetch.mock.calls[1][1].headers.Authorization).toBe("Bearer fresh-token");
-    expect(JSON.parse(mockFetch.mock.calls[1][1].body).profileArn).toBe(freshProfileArn);
+    expect(mockFetch.mock.calls[1][1].headers.Authorization).toBe("Bearer stale-token");
+    expect(mockFetch.mock.calls[2][1].headers.Authorization).toBe("Bearer fresh-token");
+    expect(JSON.parse(mockFetch.mock.calls[2][1].body).profileArn).toBe(freshProfileArn);
     expect(events.find((event) => event.type === "done")).toBeDefined();
 
     getCredsSpy.mockRestore();
