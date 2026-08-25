@@ -191,6 +191,54 @@ describe("Kiro management control plane", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("continues probing after a 403 on the primary region and resolves in the fallback (#131)", async () => {
+    const euArn = "arn:aws:codewhisperer:eu-central-1:123456789012:profile/eu";
+    const fetchMock = vi
+      .fn()
+      // Primary (us-east-1): 403 Forbidden — token has no profile in this region
+      .mockResolvedValueOnce({ ok: false, status: 403, statusText: "Forbidden" })
+      // Fallback (eu-central-1): profile found
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ profiles: [{ arn: euArn }] }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(resolveKiroProfileArn(auth)).resolves.toBe(euArn);
+
+    // Both canonical regions were probed; the 403 did not abort the probe.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://management.us-east-1.kiro.dev/List-Available-Profiles");
+    expect(fetchMock.mock.calls[1][0]).toBe("https://management.eu-central-1.kiro.dev/List-Available-Profiles");
+
+    // Second resolution is served from cache — no further probing.
+    await expect(resolveKiroProfileArn(auth)).resolves.toBe(euArn);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rethrows the 403 when every canonical region rejects (#131)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 403, statusText: "Forbidden" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // A 403 on every region is a genuine auth-plane failure — keep the 403 so
+    // callers that refresh credentials and retry on 403 (#107) still handle it.
+    await expect(resolveKiroProfileArn(auth)).rejects.toThrow(
+      "Kiro management ListAvailableProfiles failed in eu-central-1: 403 Forbidden",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not catch non-403 management errors as a region-mismatch signal (#131)", async () => {
+    const fetchMock = vi
+      .fn()
+      // Primary (us-east-1): 500 — transient service error, not a region mismatch
+      .mockResolvedValueOnce({ ok: false, status: 500, statusText: "Internal Server Error" })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ profiles: [{ arn: profileArn }] }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(resolveKiroProfileArn(auth)).rejects.toThrow(
+      "Kiro management ListAvailableProfiles failed in us-east-1: 500 Internal Server Error",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not re-probe a region whitelisted by the SSO-derived primary (#104)", async () => {
     // us-east-1 as primary: candidate set is [us-east-1, eu-central-1] — the
     // same region should only be queried once.
