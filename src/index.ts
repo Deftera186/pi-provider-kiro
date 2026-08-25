@@ -27,12 +27,48 @@ export {
 } from "./diagnostics.js";
 export { resolveApiRegion } from "./endpoints.js";
 export type { KiroStreamEvent } from "./event-parser.js";
+export {
+  isKiroToolStructureRule,
+  KIRO_TOOL_STRUCTURE_RULES,
+  KIRO_VALIDATION_MESSAGES,
+  type KiroRepairResult,
+  type KiroToolStructureRule,
+  type KiroValidationError,
+  type KiroValidationResult,
+  KiroValidationRule,
+  kiroConversationEntries,
+  repairKiroConversation,
+  SYNTHETIC_FAILED_TOOL_RESULT_TEXT,
+  validateKiroConversation,
+  validateKiroToolStructure,
+} from "./history-validator.js";
 export { KIRO_MODEL_IDS, kiroModels, resolveKiroModel } from "./models.js";
+// Kiro's own error vocabulary and the predicates this provider classifies it
+// with. Published so consumers can interpret a reason code without an error
+// instance in hand (e.g. a persisted log line) instead of hardcoding copies of
+// the literals, which drift when the service adds a code.
+export type { KiroReasonCode } from "./retry.js";
+export {
+  CAPACITY_PATTERN,
+  isCapacityError,
+  isNonRetryableBodyError,
+  isTooBigError,
+  KIRO_REASON_CODES,
+  NON_RETRYABLE_BODY_PATTERNS,
+  TOO_BIG_PATTERNS,
+} from "./retry.js";
 export { streamKiro } from "./stream.js";
 // The value vocabulary for the provenance diagnostic's `details.usage`. Exported
 // alongside the stop-reason record types so a consumer can name BOTH halves of
 // the payload rather than re-declaring the union it has to switch on.
 export type { KiroUsage, KiroUsageProvenance, KiroUsageSource } from "./token-usage.js";
+export {
+  EMPTY_CONTENT_PLACEHOLDER,
+  type KiroHistoryEntry,
+  type KiroToolResult,
+  type KiroToolUse,
+  type KiroUserInputMessage,
+} from "./transform.js";
 
 /**
  * Host-driven catalog refresh. `oauth.modifyModels` only projects whatever the

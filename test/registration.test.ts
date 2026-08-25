@@ -23,6 +23,36 @@ describe("Feature 1: Extension Registration", () => {
     expect(typeof mod.default).toBe("function");
   });
 
+  // Consumers that classify a reason code without an error instance in hand
+  // (a persisted log line, say) need the vocabulary through the package entry
+  // point, not a deep import into src/retry.js.
+  it("exposes Kiro's reason codes and classification predicates from the entry point", async () => {
+    const mod = await import("../src/index.js");
+    const retry = await import("../src/retry.js");
+
+    expect(mod.KIRO_REASON_CODES).toBe(retry.KIRO_REASON_CODES);
+    expect(mod.TOO_BIG_PATTERNS).toBe(retry.TOO_BIG_PATTERNS);
+    expect(mod.NON_RETRYABLE_BODY_PATTERNS).toBe(retry.NON_RETRYABLE_BODY_PATTERNS);
+    expect(mod.CAPACITY_PATTERN).toBe(retry.CAPACITY_PATTERN);
+    expect(mod.isTooBigError).toBe(retry.isTooBigError);
+    expect(mod.isNonRetryableBodyError).toBe(retry.isNonRetryableBodyError);
+    expect(mod.isCapacityError).toBe(retry.isCapacityError);
+  });
+
+  it("keeps predicate behaviour unchanged through the entry point", async () => {
+    const { KIRO_REASON_CODES, isCapacityError, isNonRetryableBodyError, isTooBigError } = await import(
+      "../src/index.js"
+    );
+
+    expect(isTooBigError(413, "")).toBe(true);
+    expect(isTooBigError(400, KIRO_REASON_CODES.CONTENT_LENGTH_EXCEEDS_THRESHOLD)).toBe(true);
+    expect(isTooBigError(400, KIRO_REASON_CODES.REQUEST_BODY_INVALID)).toBe(false);
+    expect(isNonRetryableBodyError(KIRO_REASON_CODES.MONTHLY_REQUEST_COUNT)).toBe(true);
+    expect(isNonRetryableBodyError(KIRO_REASON_CODES.INSUFFICIENT_MODEL_CAPACITY)).toBe(false);
+    expect(isCapacityError(KIRO_REASON_CODES.INSUFFICIENT_MODEL_CAPACITY)).toBe(true);
+    expect(isCapacityError(KIRO_REASON_CODES.MONTHLY_REQUEST_COUNT)).toBe(false);
+  });
+
   it("calls registerProvider with 'kiro'", async () => {
     const mod = await import("../src/index.js");
     const { pi, registerProvider } = mockPi();
@@ -236,5 +266,35 @@ describe("Feature 1: Extension Registration", () => {
         }),
       ]),
     );
+  });
+
+  // Extension **entry module** surface — not an npm package entry point.
+  //
+  // `pi.extensions: ["./dist/index.js"]` tells the pi host which module to load.
+  // It is not a bare-specifier entry: `package.json` declares no `main`,
+  // `exports`, or `types`, and the build emits no declarations, so
+  // `import { validateKiroConversation } from "pi-provider-kiro"` does not
+  // resolve from the published tarball (verified 2026-08-11 by packing and
+  // importing in an isolated consumer: `ERR_MODULE_NOT_FOUND`). This pins that
+  // the symbols leave this module; giving them a resolvable package entry is a
+  // packaging change owned separately.
+  it("re-exports the history validator surface from the entry module", async () => {
+    const mod = await import("../src/index.js");
+    for (const name of [
+      "validateKiroConversation",
+      "validateKiroToolStructure",
+      "repairKiroConversation",
+      "kiroConversationEntries",
+      "isKiroToolStructureRule",
+    ] as const) {
+      expect(typeof mod[name], name).toBe("function");
+    }
+    expect(mod.KiroValidationRule.NON_EMPTY_USER_MESSAGE).toBe("NON_EMPTY_USER_MESSAGE");
+    expect(mod.KIRO_TOOL_STRUCTURE_RULES).toHaveLength(3);
+    expect(mod.KIRO_VALIDATION_MESSAGES.NON_EMPTY_USER_MESSAGE).toBe(
+      "User messages must have either content or tool results",
+    );
+    expect(mod.SYNTHETIC_FAILED_TOOL_RESULT_TEXT).toBe("Tool use was interrupted and did not produce a result.");
+    expect(mod.EMPTY_CONTENT_PLACEHOLDER).toBe("Please proceed with the task.");
   });
 });
