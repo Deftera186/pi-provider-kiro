@@ -67,6 +67,80 @@ describe("Feature 3: OAuth — Token Refresh", () => {
       vi.unstubAllGlobals();
     });
 
+    it("refreshes external IdP tokens against the customer token endpoint", async () => {
+      const mockFetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ access_token: "idp_at", refresh_token: "idp_rt2", expires_in: 3600 }),
+      });
+      vi.stubGlobal("fetch", mockFetch);
+
+      const tokenEndpoint = "https://example.okta.com/oauth2/default/v1/token";
+      const creds = await refreshKiroToken({
+        refresh: `idp_rt|0oaEXAMPLE|${tokenEndpoint}|external-idp`,
+        access: "old",
+        expires: 0,
+        region: "us-east-1",
+      } as KiroCredentials);
+
+      expect(creds.access).toBe("idp_at");
+      expect(creds.refresh).toBe(`idp_rt2|0oaEXAMPLE|${tokenEndpoint}|external-idp`);
+      expect((creds as KiroCredentials).authMethod).toBe("external-idp");
+      expect((creds as KiroCredentials).clientSecret).toBe("");
+
+      const [url, request] = mockFetch.mock.calls[0];
+      expect(url).toBe(tokenEndpoint);
+      expect(request.headers["Content-Type"]).toBe("application/x-www-form-urlencoded");
+      const body = new URLSearchParams(request.body);
+      expect(body.get("grant_type")).toBe("refresh_token");
+      expect(body.get("client_id")).toBe("0oaEXAMPLE");
+      expect(body.get("refresh_token")).toBe("idp_rt");
+      expect(body.get("client_secret")).toBeNull();
+      vi.unstubAllGlobals();
+    });
+
+    it("reuses the previous refresh token when the IdP does not rotate it", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ access_token: "idp_at", expires_in: 3600 }),
+        }),
+      );
+      const creds = await refreshKiroToken({
+        refresh: "idp_rt|cid|https://idp.example/token|external-idp",
+        access: "old",
+        expires: 0,
+      } as KiroCredentials);
+      expect(creds.refresh).toBe("idp_rt|cid|https://idp.example/token|external-idp");
+      vi.unstubAllGlobals();
+    });
+
+    it("throws on external IdP token refresh failure", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({ ok: false, status: 400 }));
+      await expect(
+        refreshKiroToken({
+          refresh: "idp_rt|cid|https://idp.example/token|external-idp",
+          access: "old",
+          expires: 0,
+        } as KiroCredentials),
+      ).rejects.toThrow("External IdP token refresh failed: 400");
+      vi.unstubAllGlobals();
+    });
+
+    it("throws when the external IdP refresh string carries no token endpoint", async () => {
+      const mockFetch = vi.fn();
+      vi.stubGlobal("fetch", mockFetch);
+      await expect(
+        refreshKiroToken({
+          refresh: "idp_rt|cid||external-idp",
+          access: "old",
+          expires: 0,
+        } as KiroCredentials),
+      ).rejects.toThrow("External IdP token refresh: missing token endpoint");
+      expect(mockFetch).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+
     it("throws on desktop token refresh failure", async () => {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({ ok: false, status: 401 }));
       await expect(

@@ -4,6 +4,7 @@
 import { createHash } from "node:crypto";
 import { debugLog, redactSensitiveText } from "./debug.js";
 import { getKiroEndpoints } from "./endpoints.js";
+import { kiroTokenTypeHeaders } from "./token-type.js";
 
 const LIST_PROFILES_PATH = "List-Available-Profiles";
 const LIST_MODELS_PATH = "List-Available-Models";
@@ -102,6 +103,7 @@ async function requestManagement<TResponse>(
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${auth.accessToken}`,
+      ...kiroTokenTypeHeaders(auth.accessToken),
     },
   };
   if (method === "GET") {
@@ -294,6 +296,7 @@ export async function getUsageLimits<TResponse>(
       headers: {
         Accept: "application/json",
         Authorization: `Bearer ${auth.accessToken}`,
+        ...kiroTokenTypeHeaders(auth.accessToken),
         "User-Agent": "pi-provider-kiro",
       },
     });

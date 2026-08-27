@@ -6,7 +6,7 @@ A [pi](https://shittycodingagent.ai/) provider extension that connects pi to the
 
 Kiro gives you a strong free model menu, but pi needs a provider that speaks Kiro's auth, model catalog, and streaming protocol cleanly. `pi-provider-kiro` handles that bridge, including:
 
-- AWS Builder ID, IAM Identity Center, Google, and GitHub login flows
+- AWS Builder ID, IAM Identity Center, Google, GitHub, and enterprise external IdP (OIDC) login flows
 - shared credentials from an existing `kiro-cli` session when available
 - reasoning-aware streaming
 - region-aware model filtering so pi only shows models your Kiro region can actually use
@@ -36,6 +36,9 @@ The login flow supports:
 - **Your organization** — IAM Identity Center start URL
 - **Google** — social login via `kiro-cli`
 - **GitHub** — social login via `kiro-cli`
+
+If your organization uses an external identity provider (e.g. Okta) through Kiro, log in once with
+`kiro-cli login` and the provider reuses that session — no separate pi login needed.
 
 If you already use [kiro-cli](https://kiro.dev), the provider can reuse those credentials instead of forcing a second login.
 
@@ -132,6 +135,7 @@ src/
 ├── transform.ts        # Message format conversion
 ├── history.ts          # Conversation history management
 ├── thinking-parser.ts  # Streaming <thinking> tag parser
+├── token-type.ts       # `tokentype` header for external IdP bearer tokens
 ├── event-parser.ts     # Kiro stream event parser
 └── stream.ts           # Main streaming orchestrator
 ```
