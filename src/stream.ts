@@ -57,6 +57,7 @@ import {
   MAX_RETRY_DELAY,
 } from "./retry.js";
 import { ThinkingTagParser } from "./thinking-parser.js";
+import { kiroTokenTypeHeaders } from "./token-type.js";
 import {
   applyContextUsage,
   applyMeteringCredits,
@@ -600,6 +601,7 @@ export function streamKiro(
               "Content-Type": "application/json",
               Accept: "application/vnd.amazon.eventstream",
               Authorization: `Bearer ${accessToken}`,
+              ...kiroTokenTypeHeaders(accessToken),
               "x-amzn-codewhisperer-optout": "true",
               "amz-sdk-invocation-id": crypto.randomUUID(),
               "amz-sdk-request": "attempt=1; max=1",
@@ -624,7 +626,6 @@ export function streamKiro(
               capacityRetryCount++;
               const delayMs = exponentialBackoff(capacityRetryCount - 1, capacityRetryConfig.baseDelayMs, 30_000);
               const msg = `INSUFFICIENT_MODEL_CAPACITY — retrying in ${delayMs}ms (${capacityRetryCount}/${capacityRetryConfig.maxRetries})`;
-              console.error(`[pi-provider-kiro] ${msg}`);
               logCapacityEvent(msg);
               await abortableDelay(delayMs, options?.signal);
               continue;
