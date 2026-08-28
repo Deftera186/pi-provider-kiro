@@ -24,7 +24,7 @@ export const SSO_SCOPES = [
   "codewhisperer:taskassist",
 ];
 
-export type KiroAuthMethod = "idc" | "desktop";
+export type KiroAuthMethod = "idc" | "desktop" | "external-idp";
 export type KiroLoginMethod = "auto" | "builder-id" | "google" | "github";
 
 export interface KiroCredentials extends OAuthCredentials {
@@ -91,11 +91,16 @@ async function loginKiroInternal(
     cliCreds = getKiroCliCredentials();
   }
 
-  if (cliCreds && (preferredMethod === "auto" || cliCreds.authMethod === "idc")) {
+  if (
+    cliCreds &&
+    (preferredMethod === "auto" || cliCreds.authMethod === "idc" || cliCreds.authMethod === "external-idp")
+  ) {
     (callbacks as unknown as { onProgress?: (msg: string) => void }).onProgress?.(
       cliCreds.authMethod === "desktop"
         ? "Using existing kiro-cli social credentials"
-        : "Using existing kiro-cli credentials",
+        : cliCreds.authMethod === "external-idp"
+          ? "Using existing kiro-cli external IdP credentials"
+          : "Using existing kiro-cli credentials",
     );
     return cliCreds;
   }
@@ -248,6 +253,47 @@ async function refreshKiroTokenDirect(credentials: OAuthCredentials): Promise<OA
       region,
       authMethod: "desktop" as KiroAuthMethod,
       profileArn: data.profileArn || (credentials as KiroCredentials).profileArn,
+    };
+  }
+
+  // External IdP (enterprise OIDC, e.g. Okta) — standard public-client refresh
+  // against the customer's own token endpoint. kiro-cli does the same:
+  // form-encoded grant_type/client_id/refresh_token, snake_case response, and
+  // no client secret because the OIDC app is a public PKCE client.
+  if (authMethod === "external-idp") {
+    const idpClientId = parts[1] ?? "";
+    const tokenEndpoint = parts[2] ?? "";
+    if (!tokenEndpoint) throw new Error("External IdP token refresh: missing token endpoint");
+    const response = await fetch(tokenEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+        "User-Agent": "pi-cli",
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: idpClientId,
+        refresh_token: refreshToken,
+      }).toString(),
+    });
+    if (!response.ok) throw new Error(`External IdP token refresh failed: ${response.status}`);
+    const data = (await response.json()) as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
+    if (!data.access_token) throw new Error("External IdP token refresh: missing access_token");
+    const expiresIn = typeof data.expires_in === "number" ? data.expires_in : 3600;
+    return {
+      refresh: `${data.refresh_token || refreshToken}|${idpClientId}|${tokenEndpoint}|external-idp`,
+      access: data.access_token,
+      expires: Date.now() + expiresIn * 1000 - 5 * 60 * 1000,
+      clientId: idpClientId,
+      clientSecret: "",
+      region,
+      authMethod: "external-idp" as KiroAuthMethod,
+      profileArn: (credentials as KiroCredentials).profileArn,
     };
   }
 

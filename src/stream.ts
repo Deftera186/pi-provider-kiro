@@ -57,6 +57,7 @@ import {
   MAX_RETRY_DELAY,
 } from "./retry.js";
 import { ThinkingTagParser } from "./thinking-parser.js";
+import { kiroTokenTypeHeaders } from "./token-type.js";
 import { countTokens } from "./tokenizer.js";
 import {
   buildHistory,
@@ -584,6 +585,7 @@ export function streamKiro(
               "Content-Type": "application/json",
               Accept: "application/vnd.amazon.eventstream",
               Authorization: `Bearer ${accessToken}`,
+              ...kiroTokenTypeHeaders(accessToken),
               "x-amzn-codewhisperer-optout": "true",
               "amz-sdk-invocation-id": crypto.randomUUID(),
               "amz-sdk-request": "attempt=1; max=1",

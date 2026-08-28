@@ -34,6 +34,27 @@ describe("Kiro management control plane", () => {
     expect(JSON.parse(request.body)).toEqual({});
   });
 
+  it("sends tokentype: EXTERNAL_IDP for external IdP tokens and omits it otherwise", async () => {
+    const externalIdpToken = [
+      Buffer.from(JSON.stringify({ alg: "RS256" })).toString("base64url"),
+      Buffer.from(JSON.stringify({ aud: "api://kiro" })).toString("base64url"),
+      "signature",
+    ].join(".");
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ profiles: [{ arn: profileArn }] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await resolveKiroProfileArn({ accessToken: externalIdpToken, region: "us-east-1" });
+    expect(fetchMock.mock.calls[0][1].headers.tokentype).toBe("EXTERNAL_IDP");
+
+    resetKiroProfileArnCache();
+    await resolveKiroProfileArn(auth);
+    expect(fetchMock.mock.calls[1][1].headers.tokentype).toBeUndefined();
+  });
+
   it("returns the current catalog shape, including Fable metadata", async () => {
     const fable = {
       modelId: "claude-fable-5",
