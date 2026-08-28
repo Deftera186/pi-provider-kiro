@@ -14,6 +14,18 @@ import { loginKiro, refreshKiroToken } from "./oauth.js";
 import { streamKiro } from "./stream.js";
 import { fetchKiroUsage } from "./usage.js";
 
+export type {
+  KiroStopReasonRecord,
+  KiroStopReasonSource,
+  KiroTurnProvenanceInput,
+} from "./diagnostics.js";
+export {
+  createKiroTurnProvenanceDiagnostic,
+  isModeledContextOverflowStopReason,
+  KIRO_MODELED_STOP_REASONS,
+  KIRO_TURN_PROVENANCE_DIAGNOSTIC,
+  mapModeledStopReason,
+} from "./diagnostics.js";
 export { resolveApiRegion } from "./endpoints.js";
 export type { KiroStreamEvent } from "./event-parser.js";
 export {
@@ -47,6 +59,11 @@ export {
   TOO_BIG_PATTERNS,
 } from "./retry.js";
 export { streamKiro } from "./stream.js";
+
+// The value vocabulary for the provenance diagnostic's `details.usage`. Exported
+// alongside the stop-reason record types so a consumer can name BOTH halves of
+// the payload rather than re-declaring the union it has to switch on.
+export type { KiroUsage, KiroUsageProvenance, KiroUsageSource } from "./token-usage.js";
 export {
   EMPTY_CONTENT_PLACEHOLDER,
   type KiroHistoryEntry,
