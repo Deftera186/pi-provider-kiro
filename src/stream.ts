@@ -76,6 +76,7 @@ import {
   relocateDisplacedToolResults,
   sanitizeSurrogates,
   TOOL_RESULT_LIMIT,
+  toKiroToolUseId,
   truncate,
 } from "./transform.js";
 import { TRUNCATION_NOTICE, wasPreviousResponseTruncated } from "./truncation.js";
@@ -349,7 +350,7 @@ export function streamKiro(
                 const tc = b as ToolCall;
                 armToolUses.push({
                   name: tc.name,
-                  toolUseId: tc.id,
+                  toolUseId: toKiroToolUseId(tc.id),
                   input:
                     typeof tc.arguments === "string"
                       ? JSON.parse(tc.arguments)
@@ -386,7 +387,7 @@ export function streamKiro(
               currentToolResults.push({
                 content: [{ text: truncate(getContentText(m), toolResultLimit) }],
                 status: trm.isError ? "error" : "success",
-                toolUseId: trm.toolCallId,
+                toolUseId: toKiroToolUseId(trm.toolCallId),
               });
               if (Array.isArray(trm.content))
                 for (const c of trm.content) if (c.type === "image") toolResultImages.push(c as ImageContent);
@@ -408,7 +409,7 @@ export function streamKiro(
               currentToolResults.push({
                 content: [{ text: truncate(getContentText(m), toolResultLimit) }],
                 status: trm.isError ? "error" : "success",
-                toolUseId: trm.toolCallId,
+                toolUseId: toKiroToolUseId(trm.toolCallId),
               });
               if (Array.isArray(trm.content))
                 for (const c of trm.content) if (c.type === "image") toolResultImages2.push(c as ImageContent);
