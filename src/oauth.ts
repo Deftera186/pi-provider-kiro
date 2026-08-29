@@ -270,8 +270,26 @@ export async function refreshKiroToken(credentials: OAuthCredentials): Promise<O
 }
 
 async function refreshKiroTokenInternal(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-  const { getKiroCliCredentials, getKiroCliCredentialsAllowExpired, saveKiroCliCredentials, getKiroCliSocialToken } =
-    await import("./kiro-cli.js");
+  const {
+    getKiroCliCredentials,
+    getKiroCliCredentialsAllowExpired,
+    saveKiroCliCredentials,
+    getKiroCliSocialToken,
+    getKiroCliSocialTokenAllowExpired,
+  } = await import("./kiro-cli.js");
+  const credentialAuthMethod =
+    (credentials as KiroCredentials).authMethod ??
+    (credentials.refresh.split("|").at(-1) === "desktop" ? "desktop" : "idc");
+  const getValidCliCredentials = (): KiroCredentials | undefined => {
+    if (credentialAuthMethod === "desktop") return getKiroCliSocialToken();
+    const cliCreds = getKiroCliCredentials();
+    return cliCreds?.authMethod === "idc" ? cliCreds : undefined;
+  };
+  const getExpiredCliCredentials = (): KiroCredentials | undefined => {
+    if (credentialAuthMethod === "desktop") return getKiroCliSocialTokenAllowExpired();
+    const cliCreds = getKiroCliCredentialsAllowExpired();
+    return cliCreds?.authMethod === "idc" ? cliCreds : undefined;
+  };
 
   // API key credentials are long-lived bearer tokens — there is nothing to
   // refresh. Return them unchanged so the same key keeps being used.
@@ -279,38 +297,33 @@ async function refreshKiroTokenInternal(credentials: OAuthCredentials): Promise<
     return credentials;
   }
 
-  // Layer 0: Kiro IDE token — freshest source, covers IAM Identity Center
-  const ideCreds = getKiroIdeCredentials();
-  if (ideCreds) return ideCreds;
+  // Kiro IDE credentials are IDC credentials. Only consult them for IDC
+  // credential refresh — never replace a stored social/desktop session with
+  // the IDE's potentially unrelated account (auth-family guard, #142).
+  if (credentialAuthMethod === "idc") {
+    const ideCreds = getKiroIdeCredentials();
+    if (ideCreds) return ideCreds;
+  }
 
-  // Layer 1: Pre-refresh check — prefer social token if available (user logged in that way)
-  // Otherwise check for any valid kiro-cli token
-  let preCheckCreds = getKiroCliSocialToken();
-  if (!preCheckCreds) {
-    preCheckCreds = getKiroCliCredentials();
-  }
-  if (preCheckCreds) {
-    return preCheckCreds;
-  }
+  // Prefer a fresh CLI token only when it belongs to the same auth family.
+  const preCheckCreds = getValidCliCredentials();
+  if (preCheckCreds) return preCheckCreds;
 
   try {
     const refreshed = await refreshKiroTokenDirect(credentials);
 
-    // Layer 2: Write refreshed tokens back to kiro-cli's SQLite DB so both stay in sync.
+    // Write refreshed tokens back to kiro-cli's SQLite DB so both stay in sync.
     saveKiroCliCredentials(refreshed as KiroCredentials);
 
     return refreshed;
   } catch (refreshError) {
-    // Layer 3: Refresh token may have been rotated by kiro-cli between our
-    // Layer 1 check and the network call. Re-read kiro-cli's DB.
-    const retryCreds = getKiroCliCredentials();
-    if (retryCreds) {
-      return retryCreds;
-    }
+    // The CLI may have rotated the refresh token between the pre-check and
+    // network call. Re-read only the matching auth family.
+    const retryCreds = getValidCliCredentials();
+    if (retryCreds) return retryCreds;
 
-    // Layer 4: kiro-cli may have a newer refresh token (expired access token).
-    // Try refreshing with those credentials instead of the stale ones from auth.json.
-    const expiredCliCreds = getKiroCliCredentialsAllowExpired();
+    // The CLI may have a newer refresh token with an expired access token.
+    const expiredCliCreds = getExpiredCliCredentials();
     if (expiredCliCreds && expiredCliCreds.refresh !== credentials.refresh) {
       try {
         const refreshedFromCli = await refreshKiroTokenDirect(expiredCliCreds);
@@ -321,8 +334,7 @@ async function refreshKiroTokenInternal(credentials: OAuthCredentials): Promise<
       }
     }
 
-    // Layer 5: Graceful degradation — our expires has a 5-min buffer, so the
-    // actual AWS token may still be valid. Return it to buy time.
+    // Our expires has a 5-min buffer, so the actual token may still be valid.
     const actualExpiry = credentials.expires + EXPIRES_BUFFER_MS;
     if (credentials.access && Date.now() < actualExpiry) {
       return { ...credentials, expires: actualExpiry };
