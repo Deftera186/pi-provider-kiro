@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getKiroCliSocialToken } from "../src/kiro-cli.js";
+import { getKiroIdeCredentials } from "../src/kiro-ide.js";
 import type { KiroCredentials } from "../src/oauth.js";
 import { refreshKiroToken } from "../src/oauth.js";
 
@@ -10,6 +12,20 @@ vi.mock("../src/kiro-cli.js", () => ({
   getKiroCliSocialTokenAllowExpired: vi.fn(() => undefined),
   saveKiroCliCredentials: vi.fn(),
 }));
+
+// The IDE credential source is a real file read; stub it so a developer's live
+// Kiro IDE session cannot satisfy the refresh under test.
+vi.mock("../src/kiro-ide.js", () => ({
+  getKiroIdeCredentials: vi.fn(() => undefined),
+  getKiroIdeCredentialsAllowExpired: vi.fn(() => undefined),
+}));
+
+beforeEach(() => {
+  vi.mocked(getKiroCliSocialToken).mockReset();
+  vi.mocked(getKiroCliSocialToken).mockReturnValue(undefined);
+  vi.mocked(getKiroIdeCredentials).mockReset();
+  vi.mocked(getKiroIdeCredentials).mockReturnValue(undefined);
+});
 
 describe("Feature 3: OAuth — Token Refresh", () => {
   // Interactive login / device code flow tests live in test/login.test.ts (Feature 10)
@@ -266,5 +282,41 @@ describe("Feature 3: OAuth — Token Refresh", () => {
 
       vi.unstubAllGlobals();
     });
+  });
+
+  it("does not replace desktop credentials with an unrelated IDE IDC account", async () => {
+    vi.mocked(getKiroIdeCredentials).mockReturnValueOnce({
+      refresh: "ide_rt|ide_cid|ide_csec|idc",
+      access: "ide_at",
+      expires: Date.now() + 3_600_000,
+      clientId: "ide_cid",
+      clientSecret: "ide_csec",
+      region: "eu-central-1",
+      authMethod: "idc",
+    });
+    vi.mocked(getKiroCliSocialToken).mockReturnValueOnce({
+      refresh: "social_rt|desktop",
+      access: "social_at",
+      expires: Date.now() + 3_600_000,
+      clientId: "",
+      clientSecret: "",
+      region: "us-east-1",
+      authMethod: "desktop",
+      profileArn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/social",
+    });
+
+    const creds = (await refreshKiroToken({
+      refresh: "stored_rt|desktop",
+      access: "stored_at",
+      expires: 0,
+      clientId: "",
+      clientSecret: "",
+      region: "us-east-1",
+      authMethod: "desktop",
+    } as KiroCredentials)) as KiroCredentials;
+
+    expect(creds.access).toBe("social_at");
+    expect(creds.authMethod).toBe("desktop");
+    expect(creds.region).toBe("us-east-1");
   });
 });
