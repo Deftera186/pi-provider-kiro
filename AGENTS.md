@@ -69,6 +69,12 @@ HTTP 429 is provider-retried only when its JSON `reason` is exactly `USER_REQUES
 ### The Refresh String Is The Only Storage
 pi persists an OAuth credential as `access` / `refresh` / `expires`; the extra `KiroCredentials` fields (`region`, `clientId`, `clientSecret`, `profileArn`, `authMethod`) are **not** returned on the next session. That is why the refresh field is a pipe-delimited record rather than an opaque token — anything the refresh chain still needs has to be packed into it. `src/refresh-token.ts` owns the format; encode and parse through it instead of splitting on `|` at a call site, and read the SSO region with `kiroCredentialRegion()` so the encoded value is used when the live field is gone. The auth-method marker keeps its historical position and the optional region follows it, so the marker is located by scanning and older strings still parse.
 
+### Three Regions, Not One
+A request's region is not a single value; conflating them is the root of #104, #131 and every "profile not found in \<region\>" report.
+- **SSO region** — where the credential was issued (`eu-west-1`). Only the OIDC refresh endpoint uses it. Recover it with `kiroCredentialRegion()`.
+- **API region** — `resolveApiRegion(ssoRegion)`, one of the canonical management regions. A starting guess, not an answer.
+- **Profile region** — where the profile actually lives, discovered by probing (`kiroProfileRegion()`), and the region every profile-dependent call must address: `ListAvailableModels`, `GetUsageLimits`, and the runtime host in each model's `baseUrl`. The catalog cache stores it as `catalogRegion` so `modifyModels` can point models there without re-probing.
+
 ### Login Methods
 Users can authenticate via:
 - **Builder ID**: Native device code flow (works in SSH/remote)

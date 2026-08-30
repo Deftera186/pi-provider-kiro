@@ -8,7 +8,14 @@ import { formatSafeError } from "./debug.js";
 import { getKiroEndpoints, resolveApiRegion } from "./endpoints.js";
 import { getKiroCliCredentials } from "./kiro-cli.js";
 import { setExtensionContext } from "./login-ui.js";
-import { getCachedModels, isCacheStale, type KiroModel, kiroModels, updateKiroModelsCache } from "./models.js";
+import {
+  getCachedCatalogRegion,
+  getCachedModels,
+  isCacheStale,
+  type KiroModel,
+  kiroModels,
+  updateKiroModelsCache,
+} from "./models.js";
 import type { KiroCredentials } from "./oauth.js";
 import { loginKiro, refreshKiroToken } from "./oauth.js";
 import { kiroCredentialRegion } from "./refresh-token.js";
@@ -106,13 +113,17 @@ export default function (pi: ExtensionAPI) {
       getCliCredentials: getKiroCliCredentials,
       modifyModels: (models: Model<Api>[], cred: OAuthCredentials) => {
         const apiRegion = resolveApiRegion(kiroCredentialRegion(cred));
+        // The catalog is cached under the SSO-derived region but may have been
+        // served by another one, and runtime is regional to the profile too —
+        // so address the region that answered, not the one we derived (#104).
+        const catalogRegion = getCachedCatalogRegion(apiRegion) ?? apiRegion;
         const cachedKiro = getCachedModels(apiRegion);
         const nonKiro = models.filter((m: Model<Api>) => m.provider !== "kiro");
         const credentialProfileArn = (cred as KiroCredentials).profileArn;
         const modifiedKiro = cachedKiro.map((m: Model<Api>) => ({
           ...m,
-          baseUrl: getKiroEndpoints(apiRegion).runtime,
-          kiroRegion: apiRegion,
+          baseUrl: getKiroEndpoints(catalogRegion).runtime,
+          kiroRegion: catalogRegion,
           ...(credentialProfileArn ? { kiroProfileArn: credentialProfileArn } : {}),
         }));
 
