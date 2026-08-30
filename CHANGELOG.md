@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The entry module now re-exports `KiroManagementHttpError`. The class already shipped in 0.10.0 and is thrown by every management-plane request that returns a non-OK status (profile discovery, model catalog, usage limits) and already caught in `stream.ts`, where a 403 drives the credential-refresh retry — but it was not re-exported from `src/index.ts`, and there is no per-module file to deep-import instead: the build bundles the whole graph into one `dist/index.js`. No behaviour change: the class, its `status` field, and every throw and catch site are unchanged. Same entry-point caveat as the 0.10.0 re-exports — this is the extension entry the pi host loads, not a resolvable npm entry point.
+
 ### Fixed
 
 - Normalize cross-provider tool-call IDs before sending them to Kiro. OpenAI Responses persists compound IDs such as `call_…|fc_…` that exceed Kiro's 64-character limit and contain an unsupported pipe, which previously wedged a session with `400 REQUEST_BODY_INVALID` after switching models. Native Kiro IDs remain unchanged, while remapped tool uses and results retain the same deterministic ID.
