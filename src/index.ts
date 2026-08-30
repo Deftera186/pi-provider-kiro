@@ -11,6 +11,7 @@ import { setExtensionContext } from "./login-ui.js";
 import { getCachedModels, isCacheStale, type KiroModel, kiroModels, updateKiroModelsCache } from "./models.js";
 import type { KiroCredentials } from "./oauth.js";
 import { loginKiro, refreshKiroToken } from "./oauth.js";
+import { kiroCredentialRegion } from "./refresh-token.js";
 import { streamKiro } from "./stream.js";
 import { fetchKiroUsage } from "./usage.js";
 
@@ -71,7 +72,7 @@ async function refreshKiroModels(context: RefreshModelsContext): Promise<KiroMod
   const credential = context.credential;
   const oauthCredential = credential?.type === "oauth" ? (credential as unknown as KiroCredentials) : undefined;
   const accessToken = oauthCredential?.access ?? (credential?.type === "api_key" ? credential.key : undefined);
-  const region = resolveApiRegion(oauthCredential?.region);
+  const region = resolveApiRegion(kiroCredentialRegion(oauthCredential));
 
   if (accessToken && context.allowNetwork && (context.force || isCacheStale(region))) {
     try {
@@ -104,7 +105,7 @@ export default function (pi: ExtensionAPI) {
       getApiKey: (cred: OAuthCredentials) => cred.access,
       getCliCredentials: getKiroCliCredentials,
       modifyModels: (models: Model<Api>[], cred: OAuthCredentials) => {
-        const apiRegion = resolveApiRegion((cred as KiroCredentials).region);
+        const apiRegion = resolveApiRegion(kiroCredentialRegion(cred));
         const cachedKiro = getCachedModels(apiRegion);
         const nonKiro = models.filter((m: Model<Api>) => m.provider !== "kiro");
         const credentialProfileArn = (cred as KiroCredentials).profileArn;
